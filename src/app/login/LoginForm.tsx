@@ -5,11 +5,12 @@ import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useSignIn } from "@clerk/nextjs";
-import { Eye, EyeOff, ArrowRight, ArrowLeft } from "lucide-react";
+import { Eye, EyeOff, ArrowRight, ArrowLeft, CheckCircle } from "lucide-react";
 import { MessaivoLogo } from "@/components/MessaivoLogo";
 
-// login  → forgot → verify → newpassword
-type View = "login" | "forgot" | "verify" | "newpassword";
+// "verify" handles both code entry and new-password entry without a view change,
+// which keeps the Clerk signIn attempt alive between verifyCode() and submitPassword().
+type View = "login" | "forgot" | "verify";
 
 type Props = {
   heading?: string;
@@ -24,10 +25,11 @@ const inputStyle: React.CSSProperties = {
 };
 const inputCls = "w-full px-3 py-2.5 rounded-lg text-[13.5px] outline-none transition-all";
 
-function PwInput({ value, onChange, placeholder = "••••••••" }: {
+function PwInput({ value, onChange, placeholder = "••••••••", autoFocus }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
+  autoFocus?: boolean;
 }) {
   const [show, setShow] = useState(false);
   return (
@@ -37,6 +39,7 @@ function PwInput({ value, onChange, placeholder = "••••••••" }: 
         value={value}
         onChange={e => onChange(e.target.value)}
         placeholder={placeholder}
+        autoFocus={autoFocus}
         className={`${inputCls} pr-10`}
         style={inputStyle}
       />
@@ -44,32 +47,6 @@ function PwInput({ value, onChange, placeholder = "••••••••" }: 
         {show ? <EyeOff size={14} style={{ color: "#8B95A7" }} /> : <Eye size={14} style={{ color: "#8B95A7" }} />}
       </button>
     </div>
-  );
-}
-
-function BackButton({ onClick, label = "Back" }: { onClick: () => void; label?: string }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex items-center gap-1.5 text-[12px] mb-5 transition-opacity hover:opacity-70"
-      style={{ color: "#8B95A7" }}
-    >
-      <ArrowLeft size={13} /> {label}
-    </button>
-  );
-}
-
-function SubmitButton({ loading, label, loadingLabel }: { loading: boolean; label: React.ReactNode; loadingLabel: string }) {
-  return (
-    <button
-      type="submit"
-      disabled={loading}
-      className="flex items-center justify-center gap-2 w-full py-3 rounded-xl text-[13.5px] font-semibold text-white transition-all"
-      style={{ background: loading ? "rgba(108,99,255,0.6)" : "#6C63FF" }}
-    >
-      {loading ? loadingLabel : label}
-    </button>
   );
 }
 
@@ -86,20 +63,30 @@ export default function LoginForm({
   const [busy, setBusy] = useState(false);
   const loading = isFetching || busy;
 
-  // login fields
+  // Login
   const [email, setEmail]       = useState("");
   const [password, setPassword] = useState("");
   const [error, setError]       = useState("");
 
-  // reset flow fields
-  const [resetEmail, setResetEmail] = useState("");
-  const [code, setCode]             = useState("");
-  const [newPw, setNewPw]           = useState("");
-  const [confirmPw, setConfirmPw]   = useState("");
+  // Forgot / verify
+  const [resetEmail, setResetEmail]   = useState("");
+  const [code, setCode]               = useState("");
+  // codeVerified gates the password fields — no view change occurs between
+  // verifyCode() and submitPassword() so the Clerk attempt stays intact.
+  const [codeVerified, setCodeVerified] = useState(false);
+  const [newPw, setNewPw]             = useState("");
+  const [confirmPw, setConfirmPw]     = useState("");
 
-  function goTo(v: View) { setError(""); setView(v); }
+  function goTo(v: View) {
+    setError("");
+    setCodeVerified(false);
+    setCode("");
+    setNewPw("");
+    setConfirmPw("");
+    setView(v);
+  }
 
-  // ── STEP 0: SIGN IN ────────────────────────────────────────────────────────
+  // ── SIGN IN ────────────────────────────────────────────────────────────────
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email || !password) { setError("Please fill in all fields."); return; }
@@ -124,7 +111,6 @@ export default function LoginForm({
   };
 
   // ── STEP 1: SEND CODE ─────────────────────────────────────────────────────
-  // Identify the account then send a reset code to the email on file.
   const handleSendCode = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!resetEmail) { setError("Please enter your email address."); return; }
@@ -137,8 +123,9 @@ export default function LoginForm({
       const { error: sendErr } = await signIn!.resetPasswordEmailCode.sendCode();
       if (sendErr) { setError(sendErr.message ?? "Failed to send reset code. Try again."); return; }
 
-      setCode("");
-      goTo("verify");
+      // Move to verify view — code is now in flight
+      setError("");
+      setView("verify");
     } catch {
       setError("Could not send reset email. Check the address and try again.");
     } finally {
@@ -146,8 +133,9 @@ export default function LoginForm({
     }
   };
 
-  // ── STEP 2: VERIFY CODE ───────────────────────────────────────────────────
-  // Verify the 6-digit code. On success Clerk sets status → needs_new_password.
+  // ── STEP 2a: VERIFY CODE ──────────────────────────────────────────────────
+  // On success we reveal the password fields IN THE SAME VIEW.
+  // No view transition = signIn attempt stays alive.
   const handleVerifyCode = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!code) { setError("Please enter the verification code."); return; }
@@ -155,12 +143,9 @@ export default function LoginForm({
     setBusy(true);
     try {
       const { error: verifyErr } = await signIn!.resetPasswordEmailCode.verifyCode({ code });
-      if (verifyErr) { setError(verifyErr.message ?? "Invalid code. Please try again."); return; }
-
-      // Clerk should now have status === "needs_new_password"
-      setNewPw("");
-      setConfirmPw("");
-      goTo("newpassword");
+      if (verifyErr) { setError(verifyErr.message ?? "Invalid or expired code. Try again."); return; }
+      // Reveal password fields without changing view
+      setCodeVerified(true);
     } catch {
       setError("Invalid code. Please try again.");
     } finally {
@@ -168,11 +153,11 @@ export default function LoginForm({
     }
   };
 
-  // ── STEP 3: SET NEW PASSWORD ──────────────────────────────────────────────
-  // No code needed here — Clerk already verified it in step 2.
+  // ── STEP 2b: SET NEW PASSWORD ─────────────────────────────────────────────
+  // Called while still on the "verify" view — same signIn instance guaranteed.
   const handleSetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newPw || !confirmPw)  { setError("Please fill in all fields."); return; }
+    if (!newPw || !confirmPw)  { setError("Please fill in both password fields."); return; }
     if (newPw !== confirmPw)   { setError("Passwords do not match."); return; }
     if (newPw.length < 8)      { setError("Password must be at least 8 characters."); return; }
     setError("");
@@ -180,22 +165,43 @@ export default function LoginForm({
     try {
       const { error: pwErr } = await signIn!.resetPasswordEmailCode.submitPassword({ password: newPw });
       if (pwErr) { setError(pwErr.message ?? "Failed to set password. Please try again."); return; }
-
-      // Password reset complete — send user to login to sign in with new password.
-      router.push("/login");
+      // Password reset successful — go to login
+      router.push("/login?reset=success");
     } catch {
-      setError("Something went wrong. Please try again.");
+      setError("Something went wrong. Please start over.");
     } finally {
       setBusy(false);
     }
   };
 
-  // ── SHELL ──────────────────────────────────────────────────────────────────
+  // ── SHARED STYLES ──────────────────────────────────────────────────────────
+  const submitBtn = (label: React.ReactNode, loadingLabel: string) => (
+    <button
+      type="submit"
+      disabled={loading}
+      className="flex items-center justify-center gap-2 w-full py-3 rounded-xl text-[13.5px] font-semibold text-white transition-all"
+      style={{ background: loading ? "rgba(108,99,255,0.6)" : "#6C63FF" }}
+    >
+      {loading ? loadingLabel : label}
+    </button>
+  );
+
+  const backBtn = (onClick: () => void, label = "Back") => (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex items-center gap-1.5 text-[12px] mb-5 transition-opacity hover:opacity-70"
+      style={{ color: "#8B95A7" }}
+    >
+      <ArrowLeft size={13} /> {label}
+    </button>
+  );
+
+  // ── RENDER ─────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen flex items-center justify-center px-4" style={{ background: "#07090D" }}>
       <div className="w-full max-w-sm">
 
-        {/* Logo */}
         <div className="flex justify-center mb-8">
           <Link href="/" className="flex items-center">
             {logoUrl ? (
@@ -240,7 +246,7 @@ export default function LoginForm({
 
                 {error && <p className="text-[12px] text-red-400">{error}</p>}
 
-                <SubmitButton loading={loading} label={<>Sign in <ArrowRight size={15} /></>} loadingLabel="Signing in…" />
+                {submitBtn(<>Sign in <ArrowRight size={15} /></>, "Signing in…")}
               </form>
 
               <p className="text-center text-[12.5px] mt-5" style={{ color: "#8B95A7" }}>
@@ -253,7 +259,7 @@ export default function LoginForm({
           {/* ── STEP 1: ENTER EMAIL ── */}
           {view === "forgot" && (
             <>
-              <BackButton onClick={() => goTo("login")} label="Back to sign in" />
+              {backBtn(() => goTo("login"), "Back to sign in")}
 
               <h1 className="text-[20px] font-semibold mb-1" style={{ color: "#F5F7FA" }}>Reset password</h1>
               <p className="text-[13px] mb-6" style={{ color: "#8B95A7" }}>
@@ -271,75 +277,95 @@ export default function LoginForm({
 
                 {error && <p className="text-[12px] text-red-400">{error}</p>}
 
-                <SubmitButton loading={loading} label={<>Send code <ArrowRight size={15} /></>} loadingLabel="Sending…" />
+                {submitBtn(<>Send code <ArrowRight size={15} /></>, "Sending…")}
               </form>
             </>
           )}
 
-          {/* ── STEP 2: VERIFY CODE ── */}
+          {/* ── STEP 2: VERIFY CODE → (same view) → SET PASSWORD ── */}
           {view === "verify" && (
             <>
-              <BackButton onClick={() => goTo("forgot")} />
+              {!codeVerified && backBtn(() => goTo("forgot"))}
 
-              <h1 className="text-[20px] font-semibold mb-1" style={{ color: "#F5F7FA" }}>Enter verification code</h1>
-              <p className="text-[13px] mb-6" style={{ color: "#8B95A7" }}>
-                We sent a 6-digit code to{" "}
-                <span style={{ color: "#F5F7FA" }}>{resetEmail}</span>. Enter it below to continue.
-              </p>
+              {/* Phase A: code entry */}
+              {!codeVerified && (
+                <>
+                  <h1 className="text-[20px] font-semibold mb-1" style={{ color: "#F5F7FA" }}>
+                    Enter verification code
+                  </h1>
+                  <p className="text-[13px] mb-6" style={{ color: "#8B95A7" }}>
+                    We sent a 6-digit code to{" "}
+                    <span style={{ color: "#F5F7FA" }}>{resetEmail}</span>. Enter it below.
+                  </p>
 
-              <form onSubmit={handleVerifyCode} className="flex flex-col gap-4">
-                <div>
-                  <label className="text-[12px] font-medium block mb-1.5" style={{ color: "#8B95A7" }}>Verification code</label>
-                  <input
-                    type="text" value={code} onChange={e => setCode(e.target.value.trim())}
-                    placeholder="000000" maxLength={6} inputMode="numeric"
-                    className={inputCls} style={inputStyle} autoFocus
-                  />
-                </div>
+                  <form onSubmit={handleVerifyCode} className="flex flex-col gap-4">
+                    <div>
+                      <label className="text-[12px] font-medium block mb-1.5" style={{ color: "#8B95A7" }}>
+                        Verification code
+                      </label>
+                      <input
+                        type="text" value={code} onChange={e => setCode(e.target.value.trim())}
+                        placeholder="000000" maxLength={6} inputMode="numeric"
+                        className={inputCls} style={inputStyle} autoFocus
+                      />
+                    </div>
 
-                {error && <p className="text-[12px] text-red-400">{error}</p>}
+                    {error && <p className="text-[12px] text-red-400">{error}</p>}
 
-                <SubmitButton loading={loading} label={<>Verify code <ArrowRight size={15} /></>} loadingLabel="Verifying…" />
+                    {submitBtn(<>Verify code <ArrowRight size={15} /></>, "Verifying…")}
 
-                <p className="text-center text-[12px]" style={{ color: "#8B95A7" }}>
-                  Didn&apos;t receive it?{" "}
-                  <button
-                    type="button"
-                    onClick={() => goTo("forgot")}
-                    className="font-medium transition-opacity hover:opacity-80"
-                    style={{ color: "#6C63FF" }}
-                  >
-                    Resend code
-                  </button>
-                </p>
-              </form>
-            </>
-          )}
+                    <p className="text-center text-[12px]" style={{ color: "#8B95A7" }}>
+                      Didn&apos;t receive it?{" "}
+                      <button
+                        type="button"
+                        onClick={() => goTo("forgot")}
+                        className="font-medium transition-opacity hover:opacity-80"
+                        style={{ color: "#6C63FF" }}
+                      >
+                        Resend code
+                      </button>
+                    </p>
+                  </form>
+                </>
+              )}
 
-          {/* ── STEP 3: NEW PASSWORD ── */}
-          {view === "newpassword" && (
-            <>
-              <BackButton onClick={() => goTo("verify")} />
+              {/* Phase B: password entry — revealed after verifyCode() succeeds */}
+              {codeVerified && (
+                <>
+                  <div className="flex items-center gap-2 mb-5">
+                    <CheckCircle size={15} className="shrink-0" style={{ color: "#22c55e" }} />
+                    <span className="text-[12px]" style={{ color: "#8B95A7" }}>
+                      Code verified — now set your new password
+                    </span>
+                  </div>
 
-              <h1 className="text-[20px] font-semibold mb-1" style={{ color: "#F5F7FA" }}>Set new password</h1>
-              <p className="text-[13px] mb-6" style={{ color: "#8B95A7" }}>
-                Choose a new password for your account.
-              </p>
+                  <h1 className="text-[20px] font-semibold mb-1" style={{ color: "#F5F7FA" }}>
+                    Set new password
+                  </h1>
+                  <p className="text-[13px] mb-6" style={{ color: "#8B95A7" }}>
+                    Choose a new password for your account.
+                  </p>
 
-              <form onSubmit={handleSetPassword} className="flex flex-col gap-4">
-                <div>
-                  <label className="text-[12px] font-medium block mb-1.5" style={{ color: "#8B95A7" }}>New password</label>
-                  <PwInput value={newPw} onChange={setNewPw} placeholder="Min. 8 characters" />
-                </div>
-                <div>
-                  <label className="text-[12px] font-medium block mb-1.5" style={{ color: "#8B95A7" }}>Confirm password</label>
-                  <PwInput value={confirmPw} onChange={setConfirmPw} />
-                </div>
+                  <form onSubmit={handleSetPassword} className="flex flex-col gap-4">
+                    <div>
+                      <label className="text-[12px] font-medium block mb-1.5" style={{ color: "#8B95A7" }}>
+                        New password
+                      </label>
+                      <PwInput value={newPw} onChange={setNewPw} placeholder="Min. 8 characters" autoFocus />
+                    </div>
+                    <div>
+                      <label className="text-[12px] font-medium block mb-1.5" style={{ color: "#8B95A7" }}>
+                        Confirm password
+                      </label>
+                      <PwInput value={confirmPw} onChange={setConfirmPw} />
+                    </div>
 
-                {error && <p className="text-[12px] text-red-400">{error}</p>}
+                    {error && <p className="text-[12px] text-red-400">{error}</p>}
 
-                <SubmitButton loading={loading} label={<>Reset password <ArrowRight size={15} /></>} loadingLabel="Resetting…" />
-              </form>
+                    {submitBtn(<>Reset password <ArrowRight size={15} /></>, "Resetting…")}
+                  </form>
+                </>
+              )}
             </>
           )}
 
