@@ -125,7 +125,7 @@ export default function LoginForm({
     e.preventDefault();
     if (!code || !newPw || !confirmPw) { setError("Please fill in all fields."); return; }
     if (newPw !== confirmPw)           { setError("Passwords do not match."); return; }
-    if (newPw.length < 15)            { setError("Password must be at least 15 characters."); return; }
+    if (newPw.length < 8)             { setError("Password must be at least 8 characters."); return; }
     setError("");
     setBusy(true);
     try {
@@ -276,7 +276,7 @@ export default function LoginForm({
                 </div>
                 <div>
                   <label className="text-[12px] font-medium block mb-1.5" style={{ color: "#8B95A7" }}>New password</label>
-                  <PwInput value={newPw} onChange={setNewPw} placeholder="Min. 15 characters" />
+                  <PwInput value={newPw} onChange={setNewPw} placeholder="Min. 8 characters" />
                 </div>
                 <div>
                   <label className="text-[12px] font-medium block mb-1.5" style={{ color: "#8B95A7" }}>Confirm password</label>
