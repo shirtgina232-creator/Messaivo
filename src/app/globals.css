@@ -1,0 +1,129 @@
+@import "tailwindcss";
+
+@theme {
+  --color-violet: #6C63FF;
+  --color-violet-light: #8B85FF;
+  --color-cyan: #22D3EE;
+  --font-sans: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
+  --font-mono: var(--font-geist-mono), monospace;
+}
+
+/* ── Dark theme (default) ───────────────────────────────────── */
+:root {
+  --bg:             #07090D;
+  --bg-2:           #0B0F16;
+  --card:           #10151F;
+  --card-2:         #121925;
+  --glass:          rgba(7, 9, 13, 0.82);
+  --glass-card:     rgba(16, 21, 31, 0.72);
+  --text:           #F5F7FA;
+  --muted:          #8B95A7;
+  --border:         rgba(255, 255, 255, 0.07);
+  --border-md:      rgba(255, 255, 255, 0.11);
+  --hover:          rgba(255, 255, 255, 0.03);
+  --hover-md:       rgba(255, 255, 255, 0.06);
+  --input-bg:       rgba(255, 255, 255, 0.04);
+  --active-bg:      rgba(108, 99, 255, 0.10);
+  --shadow-card:    0 4px 24px rgba(0, 0, 0, 0.35);
+  --shadow-float:   0 40px 120px rgba(0, 0, 0, 0.55);
+  --glow-mult:      1;
+  --grid-stroke:    rgba(255, 255, 255, 0.55);
+}
+
+/* ── Light theme ────────────────────────────────────────────── */
+[data-theme="light"] {
+  --bg:             #F8FAFC;
+  --bg-2:           #EFF2F7;
+  --card:           #FFFFFF;
+  --card-2:         #F4F7FB;
+  --glass:          rgba(248, 250, 252, 0.90);
+  --glass-card:     rgba(255, 255, 255, 0.88);
+  --text:           #0D1117;
+  --muted:          #5E6E87;
+  --border:         rgba(15, 20, 40, 0.09);
+  --border-md:      rgba(15, 20, 40, 0.14);
+  --hover:          rgba(15, 20, 40, 0.03);
+  --hover-md:       rgba(15, 20, 40, 0.06);
+  --input-bg:       rgba(15, 20, 40, 0.05);
+  --active-bg:      rgba(108, 99, 255, 0.08);
+  --shadow-card:    0 1px 3px rgba(0, 0, 0, 0.07), 0 6px 20px rgba(0, 0, 0, 0.05);
+  --shadow-float:   0 20px 60px rgba(0, 0, 0, 0.10);
+  --glow-mult:      0.45;
+  --grid-stroke:    rgba(0, 0, 0, 0.35);
+}
+
+/* ── Base ───────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+  transition: background 0.25s ease, color 0.25s ease;
+}
+
+::selection {
+  background: rgba(108, 99, 255, 0.28);
+  color: var(--text);
+}
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb {
+  background: var(--border-md);
+  border-radius: 3px;
+}
+
+/* ── Utility classes ────────────────────────────────────────── */
+.glass-nav {
+  background: var(--glass);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+
+.glass-card {
+  background: var(--glass-card);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+.gradient-text {
+  background: linear-gradient(135deg, var(--text) 0%, var(--muted) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.gradient-text-accent {
+  background: linear-gradient(135deg, #6C63FF 0%, #22D3EE 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── Animations ─────────────────────────────────────────────── */
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-7px); }
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.5; }
+  50%       { opacity: 1; }
+}
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(22px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+
+.animate-float       { animation: float 6s ease-in-out infinite; }
+.animate-pulse-dot   { animation: pulse-dot 2s ease-in-out infinite; }
+.animate-fade-up     { animation: fade-up .6s ease-out forwards; }

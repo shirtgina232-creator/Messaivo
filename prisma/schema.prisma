@@ -1,0 +1,468 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Users — synced from Clerk via webhook
+model User {
+  id        String   @id @default(cuid())
+  clerkId   String   @unique
+  email     String   @unique
+  name      String?
+  avatarUrl String?
+  role      String   @default("USER") // "USER" | "ADMIN" | "SUPER_ADMIN" | "SUPPORT" | "FINANCE"
+  status    String   @default("ACTIVE") // "ACTIVE" | "SUSPENDED"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace     Workspace?
+  adminAuditLog AdminAuditLog[]
+}
+
+// Workspace — one per user (maps to the demo WorkspaceContext)
+model Workspace {
+  id     String @id @default(cuid())
+  name   String @default("My Workspace")
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Subscription state — managed by Stripe webhooks (Phase 3)
+  planId               String  @default("lite")
+  stripeCustomerId     String? @unique
+  stripeSubscriptionId String? @unique
+  stripePriceId        String?
+  subscriptionStatus   String? @default("inactive")
+  billingPeriod        String? @default("monthly")
+  currentPeriodStart   DateTime?
+  currentPeriodEnd     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  pages              FacebookPage[]
+  contacts           Contact[]
+  broadcasts         Broadcast[]
+  templates          MessageTemplate[]
+  groups             ContactGroup[]
+  creditLedger       CreditLedger?
+  creditTransactions CreditTransaction[]
+  invoices           Invoice[]
+}
+
+// Facebook Pages connected to a workspace (Phase 4)
+model FacebookPage {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  pageId       String
+  pageName     String
+  pageCategory String?
+  pageAvatar   String?
+  accessToken  String   // AES-encrypted Meta page access token (Phase 4)
+
+  instagramAccountId String?
+  instagramUsername  String?
+
+  lastSyncedAt DateTime?
+  isActive     Boolean   @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  conversations Conversation[]
+  contacts      Contact[]
+
+  @@unique([workspaceId, pageId])
+}
+
+// Contacts / Audience
+model Contact {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  pageId      String?
+  page        FacebookPage? @relation(fields: [pageId], references: [id], onDelete: SetNull)
+
+  metaUserId     String
+  name           String?
+  firstName      String?
+  lastName       String?
+  profilePicUrl  String?
+  lastMessageAt  DateTime?
+  totalMessages  Int      @default(0)
+  tags           String[] @default([])
+  notes          String?
+  isSubscribed   Boolean  @default(true)
+  locale         String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  conversations       Conversation[]
+  broadcastRecipients BroadcastRecipient[]
+  groupMemberships    ContactGroupMember[]
+
+  @@unique([workspaceId, metaUserId])
+  @@index([workspaceId])
+}
+
+// Conversations
+model Conversation {
+  id          String       @id @default(cuid())
+  workspaceId String
+  pageId      String
+  page        FacebookPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  contactId   String
+  contact     Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  metaThreadId  String?
+  status        String   @default("open")
+  assignedTo    String?
+  lastMessageAt DateTime?
+  unreadCount   Int      @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages Message[]
+
+  @@unique([pageId, contactId])
+  @@index([workspaceId, status])
+}
+
+// Messages
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  metaMessageId String?  @unique
+  direction     String
+  messageType   String   @default("text")
+  content       String?
+  attachmentUrl String?
+
+  status      String   @default("sent")
+  sentAt      DateTime?
+  deliveredAt DateTime?
+  readAt      DateTime?
+  creditsUsed Int      @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@index([conversationId])
+}
+
+// Broadcasts
+model Broadcast {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  name        String
+  pageId      String?
+  templateId  String?
+  message     String
+
+  status       String   @default("draft")
+  scheduledAt  DateTime?
+  startedAt    DateTime?
+  completedAt  DateTime?
+
+  totalRecipients Int @default(0)
+  sent            Int @default(0)
+  delivered       Int @default(0)
+  read            Int @default(0)
+  failed          Int @default(0)
+  creditsUsed     Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  recipients BroadcastRecipient[]
+}
+
+// Broadcast recipients
+model BroadcastRecipient {
+  id          String    @id @default(cuid())
+  broadcastId String
+  broadcast   Broadcast @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+  contactId   String
+  contact     Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  status        String   @default("pending")
+  metaMessageId String?
+  sentAt        DateTime?
+  deliveredAt   DateTime?
+  readAt        DateTime?
+  failureReason String?
+
+  @@unique([broadcastId, contactId])
+}
+
+// Message Templates
+model MessageTemplate {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  name       String
+  content    String
+  category   String?
+  tags       String[] @default([])
+  usageCount Int      @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Contact Groups
+model ContactGroup {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+  color       String?
+  isAuto      Boolean @default(false)
+  filter      Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members ContactGroupMember[]
+}
+
+model ContactGroupMember {
+  groupId   String
+  group     ContactGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  contactId String
+  contact   Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  addedAt   DateTime     @default(now())
+
+  @@id([groupId, contactId])
+}
+
+// Credit Ledger — current balance per workspace
+model CreditLedger {
+  id          String    @id @default(cuid())
+  workspaceId String    @unique
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  monthlyAllocation Int      @default(0)
+  bonusCredits      Int      @default(0)
+  usedThisPeriod    Int      @default(0)
+  periodStart       DateTime @default(now())
+  periodEnd         DateTime
+  unlimitedCredits  Boolean  @default(false)
+
+  updatedAt DateTime @updatedAt
+}
+
+// Credit Transactions — audit trail
+model CreditTransaction {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  type            String
+  operation       String?
+  amount          Int
+  balanceAfter    Int
+
+  pageId          String?
+  broadcastId     String?
+  messageId       String?
+  stripePaymentId String?
+  description     String?
+
+  createdAt DateTime @default(now())
+
+  @@index([workspaceId, createdAt])
+}
+
+// Invoices — synced from Stripe (Phase 3)
+model Invoice {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  stripeInvoiceId String @unique
+  amount          Int
+  currency        String @default("usd")
+  status          String
+  description     String?
+  pdfUrl          String?
+
+  planId        String?
+  creditsAdded  Int?
+  billingPeriod String?
+
+  paidAt    DateTime?
+  createdAt DateTime  @default(now())
+}
+
+// Site Theme — singleton row, admin-controlled
+model SiteTheme {
+  id String @id @default("singleton")
+
+  brandName       String @default("Messaivo")
+  logoUrl         String?
+  primaryColor    String @default("#6C63FF")
+  secondaryColor  String @default("#8B85FF")
+  accentColor     String @default("#22D3EE")
+  backgroundColor String @default("#07090D")
+  surfaceColor    String @default("#101722")
+  borderColor     String @default("rgba(255,255,255,0.08)")
+  textColor       String @default("#F5F7FA")
+  mutedTextColor  String @default("#8B95A7")
+  fontFamily      String @default("Geist")
+  buttonStyle     String @default("rounded")
+  borderRadius    String @default("8")
+
+  landingHeading     String @default("Customer Conversations, Organized")
+  landingDescription String @default("Connect your Facebook Pages, manage Messenger conversations, organize your audience, and streamline customer messaging from one intelligent workspace.")
+  ctaText            String @default("Get started free")
+  announcementText   String?
+  footerContent      String?
+
+  updatedAt DateTime @updatedAt
+  updatedBy String?  // clerkId of the admin who last saved
+}
+
+// Admin Audit Log — tracks all significant admin actions
+model AdminAuditLog {
+  id         String   @id @default(cuid())
+  adminId    String
+  admin      User     @relation(fields: [adminId], references: [id])
+  action     String
+  targetId   String?
+  targetType String?
+  details    Json?
+  createdAt  DateTime @default(now())
+
+  @@index([adminId])
+  @@index([createdAt])
+}
+
+// Plan — admin-editable plan definitions
+model Plan {
+  id              String   @id @default(cuid())
+  slug            String   @unique
+  name            String
+  description     String?
+  monthlyPrice    Float    @default(0)
+  quarterlyPrice  Float?
+  halfYearlyPrice Float?
+  yearlyPrice     Float?
+  monthlyCredits  Int      @default(0)
+  features        String[] @default([])
+  isRecommended   Boolean  @default(false)
+  displayOrder    Int      @default(0)
+  isActive        Boolean  @default(true)
+  premiumInbox    Boolean  @default(false)
+  stripeProductId String?
+  stripePriceIds  Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// Promotional offers
+model Offer {
+  id                  String    @id @default(cuid())
+  name                String
+  description         String?
+  discountPercent     Float?
+  discountFixed       Int?
+  couponCode          String?   @unique
+  applicablePlanSlugs String[]  @default([])
+  startDate           DateTime?
+  endDate             DateTime?
+  isActive            Boolean   @default(true)
+  isAutomatic         Boolean   @default(false)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+}
+
+// Customer-facing announcements
+model Announcement {
+  id            String    @id @default(cuid())
+  title         String
+  message       String
+  type          String    @default("info")
+  ctaText       String?
+  ctaUrl        String?
+  startDate     DateTime?
+  endDate       DateTime?
+  isActive      Boolean   @default(true)
+  isDismissible Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+// Site branding singleton
+model SiteBranding {
+  id               String   @id @default("singleton")
+  brandName        String   @default("Messaivo")
+  logoUrl          String?
+  faviconUrl       String?
+  loginLogoUrl     String?
+  dashboardLogoUrl String?
+  browserTitle     String   @default("Messaivo")
+  supportEmail     String   @default("")
+  companyName      String   @default("Messaivo")
+  updatedAt        DateTime @updatedAt
+  updatedBy        String?
+}
+
+// Site content singleton
+model SiteContent {
+  id                   String   @id @default("singleton")
+  loginHeading         String   @default("Welcome back")
+  loginDescription     String   @default("Sign in to your Messaivo workspace.")
+  signupHeading        String   @default("Create your account")
+  signupDescription    String   @default("Start managing customer conversations today.")
+  dashboardHeading     String   @default("Welcome to Messaivo")
+  dashboardDescription String   @default("Manage your customer conversations from one place.")
+  supportText          String   @default("Need help? Contact our support team.")
+  supportEmail         String   @default("")
+  footerText           String   @default("© 2025 Messaivo. All rights reserved.")
+  copyrightText        String   @default("© 2025 Messaivo")
+  updatedAt            DateTime @updatedAt
+  updatedBy            String?
+}
+
+// Global platform settings singleton
+model GlobalSettings {
+  id                       String   @id @default("singleton")
+  appName                  String   @default("Messaivo")
+  companyName              String   @default("Messaivo")
+  supportEmail             String   @default("")
+  websiteUrl               String   @default("")
+  timezone                 String   @default("UTC")
+  senderName               String   @default("Messaivo")
+  senderEmail              String   @default("")
+  maintenanceMode          Boolean  @default(false)
+  signupEnabled            Boolean  @default(true)
+  workspaceCreationEnabled Boolean  @default(true)
+  auditLogRetentionDays    Int      @default(90)
+  updatedAt                DateTime @updatedAt
+  updatedBy                String?
+}
+
+// Global admin-managed templates
+model GlobalTemplate {
+  id        String   @id @default(cuid())
+  name      String
+  content   String
+  category  String?
+  isActive  Boolean  @default(true)
+  createdBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
