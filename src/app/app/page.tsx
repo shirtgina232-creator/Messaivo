@@ -1,7 +1,7 @@
 import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/db";
 import Link from "next/link";
-import { MessageSquare, Users, Radio, CreditCard, Link2, Circle, Clock, ChevronRight, Activity } from "lucide-react";
+import { MessageSquare, Users, Radio, CreditCard, Link2, Circle, Clock, ChevronRight, Activity, FileText } from "lucide-react";
 
 function MetricCard({ label, value, sub, icon: Icon, accent, href }: {
   label: string; value: string | number; sub?: string;
@@ -47,6 +47,7 @@ export default async function DashboardPage() {
     page: { pageName: string } | null;
   }> = [];
   let fbPages: Array<{ id: string; pageName: string; pageId: string; _count: { contacts: number } }> = [];
+  let totalBroadcasts = 0;
 
   if (clerkId) {
     try {
@@ -85,8 +86,9 @@ export default async function DashboardPage() {
           totalAudience = ws.pages.reduce((s, p) => s + p._count.contacts, 0);
         }
 
-        const [convCount, convRows] = await Promise.all([
+        const [convCount, broadcastCount, convRows] = await Promise.all([
           prisma.conversation.count({ where: { workspaceId: ws.id, status: "OPEN" } }),
+          prisma.broadcast.count({ where: { workspaceId: ws.id } }),
           prisma.conversation.findMany({
             where: { workspaceId: ws.id },
             orderBy: { updatedAt: "desc" },
@@ -99,6 +101,7 @@ export default async function DashboardPage() {
           }),
         ]);
         activeConversations = convCount;
+        totalBroadcasts = broadcastCount;
         recentConvos = convRows;
       }
     } catch (e) {
@@ -121,10 +124,10 @@ export default async function DashboardPage() {
       {/* Metrics */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-8">
         <MetricCard label="Connected Pages"      value={connectedPages}      icon={Link2}         accent="#6C63FF" href="/app/pages"     />
-        <MetricCard label="Active Conversations"  value={activeConversations}  icon={MessageSquare} accent="#22D3EE" href="/app/inbox"     />
-        <MetricCard label="Total Audience"        value={totalAudience}        icon={Users}         accent="#10B981" href="/app/audience"  />
-        <MetricCard label="Eligible Recipients"   value={totalAudience}        icon={Radio}         accent="#F59E0B" href="/app/broadcasts"/>
-        <MetricCard label="Credits Remaining"     value={creditsDisplay}       icon={CreditCard}    accent="#EC4899" href="/app/credits"   />
+        <MetricCard label="Active Conversations" value={activeConversations}  icon={MessageSquare} accent="#22D3EE" href="/app/inbox"     />
+        <MetricCard label="Total Audience"       value={totalAudience}        icon={Users}         accent="#10B981" href="/app/audience"  />
+        <MetricCard label="Broadcasts"           value={totalBroadcasts}      icon={Radio}         accent="#F59E0B" href="/app/broadcasts"/>
+        <MetricCard label="Credits Remaining"    value={creditsDisplay}       icon={CreditCard}    accent="#EC4899" href="/app/credits"   />
       </div>
 
       <div className="grid lg:grid-cols-3 gap-6">

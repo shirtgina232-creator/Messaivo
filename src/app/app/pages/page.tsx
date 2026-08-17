@@ -1,18 +1,59 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { Plus, Settings, X, Check, ArrowRight, Wifi, WifiOff, Users, MessageSquare, Zap, RefreshCw, Globe } from "lucide-react";
+import { Plus, X, WifiOff, ArrowRight, RefreshCw, Trash2, Check, AlertCircle, Info } from "lucide-react";
 import { useWorkspace } from "@/lib/workspace-context";
-import { DEMO_PAGES } from "@/lib/demo-data";
 
-// All possible pages (connected + available to connect)
-const ALL_DEMO_PAGES = [
-  ...DEMO_PAGES,
-  { id: "p4", name: "Pro Gamers Hub",    avatar: "PG", color: "#F59E0B", followers: 3100, messages: 0, audience: 0, lastSynced: "Never", status: "disconnected" as const },
-  { id: "p5", name: "Winners Circle",    avatar: "WC", color: "#EC4899", followers: 1850, messages: 0, audience: 0, lastSynced: "Never", status: "disconnected" as const },
-  { id: "p6", name: "Jackpot Arena",     avatar: "JA", color: "#14B8A6", followers: 2400, messages: 0, audience: 0, lastSynced: "Never", status: "disconnected" as const },
-];
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+type ApiPage = {
+  id: string;
+  pageId: string;
+  pageName: string;
+  pageCategory: string | null;
+  pageAvatar: string | null;
+  isActive: boolean;
+  lastSyncedAt: string | null;
+};
+
+// ── Error messages ────────────────────────────────────────────────────────────
+
+const ERROR_MSGS: Record<string, string> = {
+  not_configured: "Meta credentials are not configured. Please set META_APP_ID and META_APP_SECRET in your environment.",
+  denied:         "You declined Facebook authorization. No pages were connected.",
+  no_pages:       "Your Facebook account doesn't manage any Pages. Create a Facebook Page first, then connect it here.",
+  token_error:    "Failed to exchange the Facebook authorization code. Please try again.",
+  invalid_state:  "The authorization request expired. Please try again.",
+  server_error:   "An unexpected error occurred. Please try again.",
+  invalid_callback: "Invalid callback parameters. Please try again.",
+};
+
+// ── Disconnect modal ──────────────────────────────────────────────────────────
+
+function DisconnectModal({ pageName, onConfirm, onClose }: { pageName: string; onConfirm: () => void; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative w-full max-w-sm rounded-2xl overflow-hidden" style={{ background: "#0A111B", border: "1px solid rgba(239,68,68,0.25)" }} onClick={e => e.stopPropagation()}>
+        <div className="px-6 py-5">
+          <div className="w-11 h-11 rounded-xl flex items-center justify-center mb-4" style={{ background: "rgba(239,68,68,0.1)" }}>
+            <WifiOff size={18} style={{ color: "#EF4444" }} />
+          </div>
+          <div className="text-[15px] font-semibold mb-2" style={{ color: "#F5F7FA" }}>Disconnect {pageName}?</div>
+          <div className="text-[12.5px] mb-5" style={{ color: "#8B95A7" }}>
+            This will remove the page from Messaivo. Existing conversations and contacts will be preserved, but new messages won{"'"}t sync.
+          </div>
+          <div className="flex gap-3">
+            <button onClick={onClose} className="flex-1 py-2.5 rounded-xl text-[13px] font-medium" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#8B95A7" }}>Cancel</button>
+            <button onClick={onConfirm} className="flex-1 py-2.5 rounded-xl text-[13px] font-semibold" style={{ background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.25)", color: "#EF4444" }}>Disconnect</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ── Plan limit modal ──────────────────────────────────────────────────────────
 
@@ -22,27 +63,21 @@ function PlanLimitModal({ onClose }: { onClose: () => void }) {
     <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <div className="relative w-full max-w-sm rounded-2xl overflow-hidden" style={{ background: "#0A111B", border: "1px solid rgba(239,68,68,0.25)" }} onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: "rgba(255,255,255,0.07)" }}>
-          <h2 className="text-[15px] font-semibold" style={{ color: "#F5F7FA" }}>Page Limit Reached</h2>
-          <button onClick={onClose}><X size={16} style={{ color: "#8B95A7" }} /></button>
-        </div>
         <div className="px-6 py-5">
-          <div className="w-12 h-12 rounded-xl flex items-center justify-center mb-4" style={{ background: "rgba(239,68,68,0.1)" }}>
-            <WifiOff size={20} style={{ color: "#EF4444" }} />
+          <div className="w-11 h-11 rounded-xl flex items-center justify-center mb-4" style={{ background: "rgba(239,68,68,0.1)" }}>
+            <WifiOff size={18} style={{ color: "#EF4444" }} />
           </div>
           <div className="text-[14px] font-semibold mb-2" style={{ color: "#F5F7FA" }}>
-            Your {plan.name} plan supports up to {plan.pageLimit} connected Page{plan.pageLimit > 1 ? "s" : ""}.
+            Page limit reached — your {plan.name} plan supports up to {plan.pageLimit} page{plan.pageLimit !== 1 ? "s" : ""}.
           </div>
-          <div className="text-[13px] mb-5" style={{ color: "#8B95A7" }}>
-            Upgrade your plan to connect more Facebook Pages and manage a larger audience.
-          </div>
+          <div className="text-[12.5px] mb-5" style={{ color: "#8B95A7" }}>Upgrade to connect more Facebook Pages.</div>
           <div className="flex gap-3">
-            <Link href="/app/billing" className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold text-white" style={{ background: "#6C63FF" }} onClick={onClose}>
-              Upgrade Plan <ArrowRight size={13} />
+            <Link href="/app/billing" onClick={onClose} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold text-white" style={{ background: "#6C63FF" }}>
+              Upgrade <ArrowRight size={13} />
             </Link>
-            <Link href="/app/billing" className="flex-1 flex items-center justify-center py-2.5 rounded-xl text-[13px] font-medium" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#8B95A7" }} onClick={onClose}>
-              View Plans
-            </Link>
+            <button onClick={onClose} className="flex-1 py-2.5 rounded-xl text-[13px] font-medium" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#8B95A7" }}>
+              Cancel
+            </button>
           </div>
         </div>
       </div>
@@ -50,283 +85,280 @@ function PlanLimitModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-// ── Connect Page modal ────────────────────────────────────────────────────────
+// ── Page selection modal (shown after Facebook OAuth) ─────────────────────────
 
-function ConnectPageModal({ onClose }: { onClose: () => void }) {
-  const { connectedPageIds, connectPage, plan } = useWorkspace();
-  const [step, setStep] = useState<"info" | "select" | "done">("info");
-  const [selected, setSelected] = useState<string[]>([]);
-  const [limitHit, setLimitHit] = useState(false);
+function PageSelectModal({ pendingPages, onDone, onSkip }: { pendingPages: ApiPage[]; onDone: () => void; onSkip: () => void }) {
+  const [selected, setSelected] = useState<Set<string>>(new Set(pendingPages.map(p => p.id)));
+  const [saving, setSaving] = useState(false);
 
-  const availablePages = ALL_DEMO_PAGES.filter(p => !connectedPageIds.includes(p.id));
-  const canConnect = (count: number) => connectedPageIds.length + count <= plan.pageLimit;
+  const toggle = (id: string) => setSelected(prev => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
 
-  const togglePage = (id: string) => {
-    setSelected(prev => {
-      if (prev.includes(id)) return prev.filter(x => x !== id);
-      if (!canConnect(prev.length + 1)) { setLimitHit(true); setTimeout(() => setLimitHit(false), 3000); return prev; }
-      return [...prev, id];
-    });
-  };
-
-  const handleConnect = () => {
-    selected.forEach(id => connectPage(id));
-    setStep("done");
-    setTimeout(onClose, 2000);
+  const confirm = async () => {
+    setSaving(true);
+    try {
+      await Promise.all(pendingPages.map(p =>
+        fetch(`/api/pages/${p.id}`, {
+          method: selected.has(p.id) ? "PATCH" : "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: selected.has(p.id) ? JSON.stringify({ isActive: true }) : undefined,
+        })
+      ));
+      onDone();
+    } catch {
+      setSaving(false);
+    }
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onSkip} />
       <div className="relative w-full max-w-md rounded-2xl overflow-hidden" style={{ background: "#0A111B", border: "1px solid rgba(255,255,255,0.1)" }} onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: "rgba(255,255,255,0.07)" }}>
-          <h2 className="text-[15px] font-semibold" style={{ color: "#F5F7FA" }}>Connect another Facebook Page</h2>
-          <button onClick={onClose}><X size={16} style={{ color: "#8B95A7" }} /></button>
+        <div className="px-6 py-4 border-b" style={{ borderColor: "rgba(255,255,255,0.07)" }}>
+          <h2 className="text-[15px] font-semibold" style={{ color: "#F5F7FA" }}>Select Pages to Connect</h2>
+          <p className="text-[12px] mt-0.5" style={{ color: "#8B95A7" }}>
+            Found {pendingPages.length} page{pendingPages.length !== 1 ? "s" : ""} your Facebook account manages. Choose which to connect.
+          </p>
         </div>
 
-        {step === "info" && (
-          <div className="px-6 py-6">
-            <div className="w-12 h-12 rounded-xl flex items-center justify-center mb-4" style={{ background: "rgba(108,99,255,0.12)" }}>
-              <Globe size={20} style={{ color: "#6C63FF" }} />
-            </div>
-            <h3 className="text-[15px] font-semibold mb-2" style={{ color: "#F5F7FA" }}>Connect another Facebook Page</h3>
-            <p className="text-[13px] mb-5 leading-relaxed" style={{ color: "#8B95A7" }}>
-              Connect another Page from your Facebook account to manage its customer conversations and audience in Messaivo.
-            </p>
-            <div className="p-3 rounded-xl mb-5" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
-              <div className="text-[11.5px]" style={{ color: "#8B95A7" }}>
-                <span style={{ color: "#F5F7FA", fontWeight: 600 }}>Plan: {plan.name}</span> · {connectedPageIds.length}/{plan.pageLimit} Pages connected
-              </div>
-            </div>
-            <button
-              className="w-full flex items-center justify-center gap-2 py-3 rounded-xl text-[13.5px] font-semibold text-white"
-              style={{ background: "#1877F2" }}
-              onClick={() => setStep("select")}
-            >
-              <Globe size={16} /> Continue with Facebook
-            </button>
-          </div>
-        )}
-
-        {step === "select" && (
-          <>
-            <div className="px-6 py-4">
-              <p className="text-[13px] mb-4" style={{ color: "#8B95A7" }}>
-                Select a Page from your Facebook account to connect:
-              </p>
-              {limitHit && (
-                <div className="mb-3 p-2.5 rounded-lg text-[12px]" style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#EF4444" }}>
-                  Page limit reached ({plan.pageLimit} max on {plan.name}). Upgrade to connect more.
-                </div>
-              )}
-              <div className="flex flex-col gap-2 max-h-60 overflow-y-auto">
-                {availablePages.length === 0 ? (
-                  <div className="text-center py-6 text-[13px]" style={{ color: "#8B95A7" }}>All demo pages are already connected.</div>
-                ) : (
-                  availablePages.map(page => (
-                    <button
-                      key={page.id}
-                      className="flex items-center gap-3 p-3 rounded-xl text-left transition-all"
-                      style={{
-                        background: selected.includes(page.id) ? `${page.color}10` : "rgba(255,255,255,0.03)",
-                        border: `1px solid ${selected.includes(page.id) ? `${page.color}35` : "rgba(255,255,255,0.07)"}`,
-                      }}
-                      onClick={() => togglePage(page.id)}
-                    >
-                      <div className="w-8 h-8 rounded-lg flex items-center justify-center text-[11px] font-bold text-white shrink-0" style={{ background: page.color }}>{page.avatar}</div>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-[13px] font-semibold" style={{ color: "#F5F7FA" }}>{page.name}</div>
-                        <div className="text-[11px]" style={{ color: "#8B95A7" }}>{page.followers.toLocaleString()} followers</div>
-                      </div>
-                      <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: selected.includes(page.id) ? page.color : "rgba(255,255,255,0.06)" }}>
-                        {selected.includes(page.id) && <Check size={11} style={{ color: "#fff" }} />}
-                      </div>
-                    </button>
-                  ))
-                )}
-              </div>
-            </div>
-            <div className="flex items-center gap-3 px-6 py-4 border-t" style={{ borderColor: "rgba(255,255,255,0.07)" }}>
-              <button className="flex-1 py-2.5 rounded-xl text-[13px] font-medium" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#8B95A7" }} onClick={() => setStep("info")}>Back</button>
+        <div className="px-4 py-3 max-h-72 overflow-y-auto flex flex-col gap-2">
+          {pendingPages.map(p => {
+            const initials = p.pageName.split(" ").map(w => w[0] ?? "").join("").toUpperCase().slice(0, 2);
+            const isChecked = selected.has(p.id);
+            return (
               <button
-                className="flex-1 py-2.5 rounded-xl text-[13px] font-semibold text-white disabled:opacity-40"
-                style={{ background: "#6C63FF" }}
-                disabled={selected.length === 0}
-                onClick={handleConnect}
+                key={p.id}
+                onClick={() => toggle(p.id)}
+                className="flex items-center gap-3 p-3 rounded-xl text-left transition-all"
+                style={{
+                  background: isChecked ? "rgba(108,99,255,0.1)" : "rgba(255,255,255,0.03)",
+                  border: `1px solid ${isChecked ? "rgba(108,99,255,0.3)" : "rgba(255,255,255,0.07)"}`,
+                }}
               >
-                Connect {selected.length > 0 ? `${selected.length} Page${selected.length > 1 ? "s" : ""}` : "selected Pages"}
+                {p.pageAvatar ? (
+                  <img src={p.pageAvatar} alt="" className="w-9 h-9 rounded-full object-cover shrink-0" />
+                ) : (
+                  <div className="w-9 h-9 rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0" style={{ background: "#6C63FF" }}>{initials || "FB"}</div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="text-[13px] font-semibold truncate" style={{ color: "#F5F7FA" }}>{p.pageName}</div>
+                  {p.pageCategory && <div className="text-[11px]" style={{ color: "#8B95A7" }}>{p.pageCategory}</div>}
+                </div>
+                <div
+                  className="w-5 h-5 rounded flex items-center justify-center shrink-0"
+                  style={{ background: isChecked ? "#6C63FF" : "rgba(255,255,255,0.06)", border: isChecked ? "none" : "1px solid rgba(255,255,255,0.15)" }}
+                >
+                  {isChecked && <Check size={11} color="white" strokeWidth={3} />}
+                </div>
               </button>
-            </div>
-          </>
-        )}
-
-        {step === "done" && (
-          <div className="flex flex-col items-center justify-center py-12 gap-3">
-            <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ background: "rgba(16,185,129,0.15)" }}>
-              <Check size={22} style={{ color: "#10B981" }} />
-            </div>
-            <div className="text-[15px] font-semibold" style={{ color: "#F5F7FA" }}>
-              Page{selected.length > 1 ? "s" : ""} connected successfully!
-            </div>
-            <div className="text-[12.5px] text-center px-4" style={{ color: "#8B95A7" }}>
-              This is a demo — no actual Meta API connection was made.
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── Page Card ─────────────────────────────────────────────────────────────────
-
-function PageCard({ page, onDisconnect }: { page: typeof ALL_DEMO_PAGES[0]; onDisconnect: () => void }) {
-  const [settingsOpen, setSettingsOpen] = useState(false);
-
-  return (
-    <div className="p-5 rounded-2xl flex flex-col gap-4 group" style={{ background: "#101722", border: "1px solid rgba(255,255,255,0.08)" }}>
-      <div className="flex items-start justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl flex items-center justify-center text-[13px] font-bold text-white shrink-0" style={{ background: page.color }}>{page.avatar}</div>
-          <div>
-            <div className="text-[13.5px] font-semibold" style={{ color: "#F5F7FA" }}>{page.name}</div>
-            <div className="flex items-center gap-1.5 mt-0.5">
-              <span className="w-1.5 h-1.5 rounded-full" style={{ background: "#10B981" }} />
-              <span className="text-[11px]" style={{ color: "#10B981" }}>Connected</span>
-            </div>
-          </div>
+            );
+          })}
         </div>
-        <div className="relative">
+
+        <div className="flex gap-3 px-6 py-4 border-t" style={{ borderColor: "rgba(255,255,255,0.07)" }}>
           <button
-            className="w-7 h-7 flex items-center justify-center rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
-            style={{ background: "rgba(255,255,255,0.05)", color: "#8B95A7" }}
-            onClick={() => setSettingsOpen(!settingsOpen)}
+            onClick={onSkip}
+            disabled={saving}
+            className="px-4 py-2.5 rounded-xl text-[13px] font-medium"
+            style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#8B95A7" }}
           >
-            <Settings size={13} />
+            Skip
           </button>
-          {settingsOpen && (
-            <div className="absolute top-9 right-0 w-40 rounded-xl shadow-xl z-20 overflow-hidden py-1" style={{ background: "#0A111B", border: "1px solid rgba(255,255,255,0.1)" }}>
-              <button className="w-full flex items-center gap-2 px-3 py-2 text-[12.5px] hover:bg-[rgba(255,255,255,0.04)]" style={{ color: "#8B95A7" }}>
-                <RefreshCw size={12} /> Sync now
-              </button>
-              <button className="w-full flex items-center gap-2 px-3 py-2 text-[12.5px] hover:bg-[rgba(255,255,255,0.04)]" style={{ color: "#8B95A7" }}>
-                <Settings size={12} /> Page settings
-              </button>
-              <div className="border-t my-1" style={{ borderColor: "rgba(255,255,255,0.06)" }} />
-              <button className="w-full flex items-center gap-2 px-3 py-2 text-[12.5px] hover:bg-[rgba(255,255,255,0.04)]" style={{ color: "#EF4444" }} onClick={() => { onDisconnect(); setSettingsOpen(false); }}>
-                <WifiOff size={12} /> Disconnect
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-3 gap-3">
-        {[
-          { icon: Users, label: "Audience",  value: page.audience.toLocaleString(), color: "#6C63FF" },
-          { icon: MessageSquare, label: "Messages", value: page.messages.toLocaleString(), color: "#22D3EE" },
-          { icon: Zap, label: "Credits", value: "—", color: "#F59E0B" },
-        ].map(({ icon: Icon, label, value, color }) => (
-          <div key={label} className="p-2.5 rounded-lg text-center" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
-            <Icon size={13} style={{ color, margin: "0 auto 4px" }} />
-            <div className="text-[13px] font-semibold" style={{ color: "#F5F7FA" }}>{value}</div>
-            <div className="text-[10px]" style={{ color: "#8B95A7" }}>{label}</div>
+          <div className="text-[12px] flex-1 self-center text-center" style={{ color: "#8B95A7" }}>
+            {selected.size} of {pendingPages.length} selected
           </div>
-        ))}
-      </div>
-
-      <div className="flex items-center justify-between pt-2 border-t text-[11px]" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
-        <span style={{ color: "#8B95A7" }}>Synced {page.lastSynced}</span>
-        <span style={{ color: page.followers > 0 ? "#8B95A7" : "#8B95A7" }}>{page.followers.toLocaleString()} followers</span>
+          <button
+            onClick={confirm}
+            disabled={selected.size === 0 || saving}
+            className="px-5 py-2.5 rounded-xl text-[13px] font-semibold text-white transition-all"
+            style={{ background: "#6C63FF", opacity: selected.size === 0 || saving ? 0.5 : 1 }}
+          >
+            {saving ? "Connecting…" : `Connect ${selected.size > 0 ? selected.size : ""} Page${selected.size !== 1 ? "s" : ""}`}
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
-// ── Main page ─────────────────────────────────────────────────────────────────
+// ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function PagesPage() {
-  const { connectedPageIds, disconnectPage, plan } = useWorkspace();
-  const [connectOpen, setConnectOpen] = useState(false);
-  const [limitOpen, setLimitOpen] = useState(false);
+  const { pages, plan, connectedPageIds, disconnectPage, reloadPages } = useWorkspace();
+  const searchParams = useSearchParams();
+  const router = useRouter();
 
-  const connectedPages = ALL_DEMO_PAGES.filter(p => connectedPageIds.includes(p.id));
-  const atLimit = connectedPageIds.length >= plan.pageLimit;
+  const flow      = searchParams.get("flow");
+  const errorKey  = searchParams.get("error");
 
-  const handleAddPage = () => {
-    if (atLimit) setLimitOpen(true);
-    else setConnectOpen(true);
+  const [allPages, setAllPages] = useState<ApiPage[]>([]);
+  const [loadingAll, setLoadingAll] = useState(false);
+  const [modal, setModal] = useState<null | "limit" | string>(null);
+  const [disconnecting, setDisconnecting] = useState<string | null>(null);
+
+  // Fetch all pages (including pending isActive:false) when in select flow
+  const fetchAll = useCallback(() => {
+    setLoadingAll(true);
+    fetch("/api/pages")
+      .then(r => r.ok ? r.json() : null)
+      .then((d: { pages?: ApiPage[] } | null) => { if (d?.pages) setAllPages(d.pages); })
+      .catch(() => {})
+      .finally(() => setLoadingAll(false));
+  }, []);
+
+  useEffect(() => {
+    if (flow === "select") fetchAll();
+  }, [flow, fetchAll]);
+
+  const pendingPages = allPages.filter(p => !p.isActive);
+
+  const handleSelectDone = () => {
+    reloadPages();
+    router.replace("/app/pages");
   };
+
+  const handleConnectClick = () => {
+    if (connectedPageIds.length >= plan.pageLimit) {
+      setModal("limit");
+    } else {
+      window.location.href = "/api/auth/meta";
+    }
+  };
+
+  const handleDisconnectConfirm = async () => {
+    if (!disconnecting) return;
+    await fetch(`/api/pages/${disconnecting}`, { method: "DELETE" }).catch(() => {});
+    disconnectPage(disconnecting);
+    setDisconnecting(null);
+    setModal(null);
+  };
+
+  const pageToDisconnect = pages.find(p => p.id === disconnecting);
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto">
-      <div className="flex items-start justify-between mb-6 flex-wrap gap-3">
+      {/* Error banner */}
+      {errorKey && ERROR_MSGS[errorKey] && (
+        <div className="mb-5 flex items-start gap-3 p-4 rounded-xl" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
+          <AlertCircle size={16} style={{ color: "#EF4444", marginTop: 1, flexShrink: 0 }} />
+          <div>
+            <div className="text-[13px] font-semibold mb-0.5" style={{ color: "#EF4444" }}>Connection failed</div>
+            <div className="text-[12.5px]" style={{ color: "#8B95A7" }}>{ERROR_MSGS[errorKey]}</div>
+            {errorKey === "not_configured" && (
+              <div className="mt-2 text-[12px] font-mono px-2 py-1 rounded" style={{ background: "rgba(255,255,255,0.04)", color: "#8B95A7" }}>
+                Set META_APP_ID and META_APP_SECRET in .env.local
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-start justify-between mb-6">
         <div>
-          <h1 className="text-[20px] font-semibold mb-1" style={{ color: "#F5F7FA" }}>Connected Pages</h1>
+          <h1 className="text-[20px] font-semibold mb-1" style={{ color: "#F5F7FA" }}>Facebook Pages</h1>
           <p className="text-[13px]" style={{ color: "#8B95A7" }}>
-            {connectedPageIds.length}/{plan.pageLimit} Pages connected · {plan.name} plan
+            {pages.length} of {plan.pageLimit} page{plan.pageLimit !== 1 ? "s" : ""} connected on your {plan.name} plan.
           </p>
         </div>
         <button
-          className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-[13px] font-semibold text-white"
-          style={{
-            background: atLimit ? "rgba(239,68,68,0.15)" : "#6C63FF",
-            border: atLimit ? "1px solid rgba(239,68,68,0.3)" : "none",
-            color: atLimit ? "#EF4444" : "#fff",
-            boxShadow: atLimit ? "none" : "0 0 20px rgba(108,99,255,0.25)",
-          }}
-          onClick={handleAddPage}
+          onClick={handleConnectClick}
+          className="flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-semibold text-white"
+          style={{ background: "#1877F2" }}
         >
-          <Plus size={15} /> Add another Page
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="white">
+            <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+          </svg>
+          Connect Page
         </button>
       </div>
 
-      {/* Plan slot bar */}
-      <div className="p-4 rounded-xl mb-6 flex items-center gap-4" style={{ background: "#101722", border: "1px solid rgba(255,255,255,0.08)" }}>
-        <div className="flex-1">
-          <div className="flex justify-between text-[12px] mb-1.5" style={{ color: "#8B95A7" }}>
-            <span>Page slots used</span>
-            <span style={{ color: "#F5F7FA", fontWeight: 600 }}>{connectedPageIds.length} / {plan.pageLimit}</span>
+      {pages.length === 0 ? (
+        <div className="py-20 flex flex-col items-center justify-center gap-4">
+          <div className="w-14 h-14 rounded-2xl flex items-center justify-center" style={{ background: "rgba(24,119,242,0.1)", border: "1px solid rgba(24,119,242,0.2)" }}>
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="#1877F2" style={{ opacity: 0.7 }}>
+              <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+            </svg>
           </div>
-          <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.07)" }}>
-            <div className="h-full rounded-full transition-all" style={{ width: `${Math.min((connectedPageIds.length / plan.pageLimit) * 100, 100)}%`, background: atLimit ? "#EF4444" : "#6C63FF" }} />
+          <div className="text-[15px] font-semibold" style={{ color: "#F5F7FA" }}>No pages connected</div>
+          <div className="text-[13px] text-center max-w-xs" style={{ color: "#8B95A7" }}>
+            Connect a Facebook Page to start receiving Messenger conversations from your audience.
+          </div>
+          <button
+            onClick={handleConnectClick}
+            className="mt-1 flex items-center gap-2.5 px-5 py-2.5 rounded-xl text-[13.5px] font-semibold text-white"
+            style={{ background: "#1877F2" }}
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="white">
+              <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+            </svg>
+            Connect with Facebook
+          </button>
+          <p className="text-[11.5px]" style={{ color: "#8B95A7" }}>
+            You{"'"}ll be redirected to Facebook to authorize access to your Pages.
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {pages.map(p => (
+            <div key={p.id} className="p-4 rounded-xl" style={{ background: "#101722", border: "1px solid rgba(255,255,255,0.07)" }}>
+              <div className="flex items-start justify-between mb-3">
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center text-[11px] font-bold text-white" style={{ background: p.color }}>{p.avatar}</div>
+                <div className="flex items-center gap-1">
+                  <button className="w-7 h-7 flex items-center justify-center rounded-lg" style={{ background: "rgba(255,255,255,0.04)", color: "#8B95A7" }} title="Sync">
+                    <RefreshCw size={12} />
+                  </button>
+                  <button
+                    onClick={() => { setDisconnecting(p.id); setModal("disconnect"); }}
+                    className="w-7 h-7 flex items-center justify-center rounded-lg"
+                    style={{ background: "rgba(239,68,68,0.06)", color: "#EF4444" }}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              </div>
+              <div className="text-[14px] font-semibold mb-1" style={{ color: "#F5F7FA" }}>{p.name}</div>
+              <div className="flex items-center gap-1.5 text-[11.5px]" style={{ color: "#10B981" }}>
+                <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                Connected
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Pending page selection modal (shown after OAuth) */}
+      {flow === "select" && !loadingAll && pendingPages.length > 0 && (
+        <PageSelectModal pendingPages={pendingPages} onDone={handleSelectDone} onSkip={() => router.replace("/app/pages")} />
+      )}
+
+      {/* If flow=select but no pending pages found, clean up the URL */}
+      {flow === "select" && !loadingAll && pendingPages.length === 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+          <div className="relative w-full max-w-sm rounded-2xl p-6 text-center" style={{ background: "#0A111B", border: "1px solid rgba(255,255,255,0.1)" }}>
+            <Info size={32} style={{ color: "#F59E0B", margin: "0 auto 12px" }} />
+            <div className="text-[14px] font-semibold mb-2" style={{ color: "#F5F7FA" }}>No pages found</div>
+            <div className="text-[12.5px] mb-4" style={{ color: "#8B95A7" }}>
+              No pending pages to connect. Try connecting again from Facebook.
+            </div>
+            <button onClick={() => router.replace("/app/pages")} className="w-full py-2.5 rounded-xl text-[13px] font-semibold text-white" style={{ background: "#6C63FF" }}>
+              Got it
+            </button>
           </div>
         </div>
-        {atLimit ? (
-          <Link href="/app/billing" className="text-[12px] font-semibold flex items-center gap-1 shrink-0" style={{ color: "#6C63FF" }}>
-            Upgrade <ArrowRight size={12} />
-          </Link>
-        ) : (
-          <span className="text-[12px] shrink-0" style={{ color: "#8B95A7" }}>{plan.pageLimit - connectedPageIds.length} slot{plan.pageLimit - connectedPageIds.length !== 1 ? "s" : ""} available</span>
-        )}
-      </div>
+      )}
 
-      <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-5">
-        {connectedPages.map(page => (
-          <PageCard key={page.id} page={page} onDisconnect={() => disconnectPage(page.id)} />
-        ))}
-
-        {/* Add card */}
-        <button
-          className="flex flex-col items-center justify-center gap-3 p-5 rounded-2xl border-2 border-dashed min-h-[200px] transition-all"
-          style={{
-            borderColor: atLimit ? "rgba(239,68,68,0.3)" : "rgba(255,255,255,0.1)",
-            color: atLimit ? "#EF4444" : "#8B95A7",
-          }}
-          onClick={handleAddPage}
-        >
-          <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: atLimit ? "rgba(239,68,68,0.08)" : "rgba(255,255,255,0.04)" }}>
-            {atLimit ? <WifiOff size={18} /> : <Plus size={18} />}
-          </div>
-          <div className="text-center">
-            <div className="text-[13.5px] font-semibold">{atLimit ? "Page limit reached" : "Connect a Page"}</div>
-            {atLimit && <div className="text-[11.5px] mt-1" style={{ color: "#8B95A7" }}>Upgrade to add more Pages</div>}
-          </div>
-        </button>
-      </div>
-
-      {connectOpen && <ConnectPageModal onClose={() => setConnectOpen(false)} />}
-      {limitOpen && <PlanLimitModal onClose={() => setLimitOpen(false)} />}
+      {modal === "limit" && <PlanLimitModal onClose={() => setModal(null)} />}
+      {modal === "disconnect" && pageToDisconnect && (
+        <DisconnectModal
+          pageName={pageToDisconnect.name}
+          onConfirm={handleDisconnectConfirm}
+          onClose={() => { setModal(null); setDisconnecting(null); }}
+        />
+      )}
     </div>
   );
 }

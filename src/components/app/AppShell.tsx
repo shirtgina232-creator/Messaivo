@@ -7,7 +7,7 @@ import {
   LayoutDashboard, Users, MessageSquare, Radio, Link2, FileText,
   Layers, BarChart2, CreditCard, Settings, ChevronLeft, Menu, X,
   Search, Bell, HelpCircle, ChevronDown, MessageCircleMore, Mail,
-  Phone, Check, LogOut, Zap, Globe, Plus,
+  Phone, Check, LogOut, Zap, Globe, Plus, ArrowRight,
 } from "lucide-react";
 import { useAuth, useUser } from "@clerk/nextjs";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -28,7 +28,7 @@ const NAV = [
     items: [
       { label: "Dashboard",  icon: LayoutDashboard, href: "/app"             },
       { label: "Audience",   icon: Users,            href: "/app/audience"   },
-      { label: "Inbox",      icon: MessageSquare,    href: "/app/inbox", badge: 3 },
+      { label: "Inbox",      icon: MessageSquare,    href: "/app/inbox" },
       { label: "Broadcasts", icon: Radio,            href: "/app/broadcasts" },
     ],
   },
@@ -479,7 +479,7 @@ function Sidebar() {
                       <>
                         <span className="text-[13px] font-medium flex-1">{item.label}</span>
                         {"badge" in item && item.badge ? (
-                          <span className="text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center text-white" style={{ background: "#6C63FF" }}>{item.badge}</span>
+                          <span className="text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center text-white" style={{ background: "#6C63FF" }}>{String(item.badge)}</span>
                         ) : null}
                       </>
                     )}
@@ -526,6 +526,91 @@ function Sidebar() {
   );
 }
 
+// Routes that require at least one Facebook Page to be connected
+const REQUIRES_PAGE = [
+  "/app/audience",
+  "/app/inbox",
+  "/app/broadcasts",
+  "/app/groups",
+  "/app/templates",
+  "/app/analytics",
+];
+
+// ── Gate loader (shown while pages are being fetched) ─────────────────────────
+
+function GateLoader() {
+  return (
+    <div className="flex-1 flex items-center justify-center">
+      <div className="flex flex-col items-center gap-3">
+        <div
+          className="w-8 h-8 rounded-full border-2 border-t-transparent animate-spin"
+          style={{ borderColor: "rgba(108,99,255,0.4)", borderTopColor: "transparent" }}
+        />
+        <span className="text-[12px]" style={{ color: "#8B95A7" }}>Loading your workspace…</span>
+      </div>
+    </div>
+  );
+}
+
+// ── Connect Facebook Gate ─────────────────────────────────────────────────────
+
+function ConnectFacebookGate() {
+  const { user } = useUser();
+  const firstName = user?.firstName ?? "there";
+
+  return (
+    <div className="flex-1 flex items-center justify-center p-6">
+      <div className="max-w-sm w-full text-center flex flex-col items-center gap-5">
+        {/* Facebook icon */}
+        <div
+          className="w-16 h-16 rounded-2xl flex items-center justify-center"
+          style={{ background: "rgba(24,119,242,0.1)", border: "1px solid rgba(24,119,242,0.2)" }}
+        >
+          <svg viewBox="0 0 24 24" width="28" height="28" fill="#1877F2">
+            <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+          </svg>
+        </div>
+
+        <div>
+          <h2 className="text-[20px] font-semibold mb-2" style={{ color: "#F5F7FA" }}>
+            Welcome, {firstName}!
+          </h2>
+          <p className="text-[13.5px] leading-relaxed" style={{ color: "#8B95A7" }}>
+            Connect your Facebook Page to start managing your Messenger audience, conversations, and broadcasts.
+          </p>
+        </div>
+
+        <a
+          href="/api/auth/meta"
+          className="flex items-center justify-center gap-2.5 w-full py-3 rounded-xl text-[14px] font-semibold text-white transition-all hover:opacity-90"
+          style={{ background: "#1877F2" }}
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="white">
+            <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+          </svg>
+          Continue with Facebook
+        </a>
+
+        <p className="text-[11.5px]" style={{ color: "#8B95A7" }}>
+          You{"'"}ll be redirected to Facebook to authorize access to your Pages.
+        </p>
+
+        <div className="flex items-center justify-center gap-6 pt-2">
+          <Link href="/app/pages" className="text-[12.5px] flex items-center gap-1 hover:underline" style={{ color: "#6C63FF" }}>
+            Manage Pages <ArrowRight size={11} />
+          </Link>
+          <Link href="/app/settings" className="text-[12.5px]" style={{ color: "#8B95A7" }}>
+            Settings
+          </Link>
+          <Link href="/app/billing" className="text-[12.5px]" style={{ color: "#8B95A7" }}>
+            Billing
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── AppShell ──────────────────────────────────────────────────────────────────
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
@@ -533,6 +618,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
+  const pathname = usePathname();
+  const { pages, pagesLoaded } = useWorkspace();
 
   const handleKey = useCallback((e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "k") { e.preventDefault(); setSearchOpen(true); }
@@ -543,6 +630,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     document.addEventListener("keydown", handleKey);
     return () => document.removeEventListener("keydown", handleKey);
   }, [handleKey]);
+
+  const isGatedRoute = pathname === "/app" || REQUIRES_PAGE.some(p => pathname.startsWith(p));
+  // Show gate when pages are loaded and none are connected on a gated route
+  const needsPage = isGatedRoute && pagesLoaded && pages.length === 0;
+  // Show loading skeleton instead of page content while pages are still being fetched
+  const awaitingPages = isGatedRoute && !pagesLoaded;
 
   return (
     <ShellContext.Provider value={{ collapsed, setCollapsed, mobileOpen, setMobileOpen }}>
@@ -556,8 +649,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           />
           {/* Active announcements from DB */}
           <AnnouncementBanner />
-          <main className="flex-1 overflow-y-auto" style={{ background: "#07090D" }}>
-            {children}
+          <main className="flex-1 overflow-y-auto flex flex-col" style={{ background: "#07090D" }}>
+            {needsPage ? <ConnectFacebookGate /> : awaitingPages ? <GateLoader /> : children}
           </main>
         </div>
       </div>

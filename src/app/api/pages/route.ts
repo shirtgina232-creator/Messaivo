@@ -15,13 +15,19 @@ const PAGE_SELECT = {
   createdAt: true,
 } as const;
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
     const ws = await getWorkspace();
     if (!ws) return unauthorized();
 
+    const url = new URL(req.url);
+    const activeOnly = url.searchParams.get("activeOnly") === "true";
+
     const pages = await prisma.facebookPage.findMany({
-      where: { workspaceId: ws.id },
+      where: {
+        workspaceId: ws.id,
+        ...(activeOnly ? { isActive: true } : {}),
+      },
       select: PAGE_SELECT,
       orderBy: { createdAt: "desc" },
     });

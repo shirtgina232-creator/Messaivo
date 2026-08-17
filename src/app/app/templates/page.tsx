@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { Plus, FileText, Edit2, Trash2, X, Check, Copy } from "lucide-react";
+import { useWorkspace } from "@/lib/workspace-context";
 
 type Template = {
   id: string;
@@ -19,6 +20,8 @@ function TemplateModal({ template, onClose, onSave }: {
   onClose: () => void;
   onSave: (t: Template) => void;
 }) {
+  const { pages } = useWorkspace();
+  const previewPageName = pages[0]?.name ?? "Your Page";
   const [name, setName] = useState(template?.name ?? "");
   const [category, setCategory] = useState(template?.category ?? "Greeting");
   const [body, setBody] = useState(template?.content ?? "");
@@ -58,8 +61,8 @@ function TemplateModal({ template, onClose, onSave }: {
   };
 
   const preview = body
-    .replace("{{first_name}}", "Sarah")
-    .replace("{{page_name}}", "My Page")
+    .replace("{{first_name}}", "Customer")
+    .replace("{{page_name}}", previewPageName)
     .replace("{{date}}", new Date().toLocaleDateString());
 
   return (
@@ -139,7 +142,7 @@ function TemplateModal({ template, onClose, onSave }: {
                   <div className="flex flex-col gap-2">
                     <div className="flex items-center gap-2 mb-1">
                       <div className="w-6 h-6 rounded-full bg-[#6C63FF] flex items-center justify-center text-[9px] font-bold text-white">M</div>
-                      <span className="text-[11px] font-semibold" style={{ color: "#F5F7FA" }}>My Page</span>
+                      <span className="text-[11px] font-semibold" style={{ color: "#F5F7FA" }}>{previewPageName}</span>
                     </div>
                     <div className="p-3 rounded-xl text-[12px] text-white leading-relaxed" style={{ background: "#6C63FF", borderRadius: "12px 12px 2px 12px" }}>{preview}</div>
                     <div className="flex items-center gap-1">

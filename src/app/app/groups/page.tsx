@@ -1,53 +1,59 @@
 "use client";
 
-import { useState } from "react";
-import { Plus, Layers, Users, X, Check, Trash2 } from "lucide-react";
-import { DEMO_GROUPS, type Group } from "@/lib/demo-data";
+import { useState, useEffect } from "react";
+import { Plus, Layers, Users, X, Check, Trash2, Edit2 } from "lucide-react";
 
-function GroupModal({ group, onClose, onSave }: {
-  group?: Group;
-  onClose: () => void;
-  onSave: (g: Group) => void;
-}) {
+const GROUP_COLORS = ["#6C63FF", "#22D3EE", "#10B981", "#F59E0B", "#EC4899", "#8B5CF6", "#F97316"];
+
+type GroupItem = {
+  id: string;
+  name: string;
+  description: string | null;
+  color: string;
+  createdAt: string;
+  _count?: { members: number };
+};
+
+// ── Modal ─────────────────────────────────────────────────────────────────────
+
+function GroupModal({ group, onClose, onSaved }: { group?: GroupItem; onClose: () => void; onSaved: () => void }) {
   const [name, setName] = useState(group?.name ?? "");
   const [description, setDescription] = useState(group?.description ?? "");
-  const [rules, setRules] = useState<string[]>([]);
+  const [color, setColor] = useState(group?.color ?? GROUP_COLORS[0]);
+  const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
 
-  const RULE_OPTIONS = [
-    "Joined in the last 30 days",
-    "Has at least 5 conversations",
-    "Status is Eligible",
-    "Status is Recent",
-    "Contacted in the last 7 days",
-    "Tagged as VIP",
-    "Connected to specific page",
-  ];
-
-  const toggleRule = (r: string) => setRules(prev => prev.includes(r) ? prev.filter(x => x !== r) : [...prev, r]);
-
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!name.trim()) return;
-    const g: Group = {
-      id: group?.id ?? `g_${Date.now()}`,
-      name,
-      description,
-      count: Math.floor(Math.random() * 300) + 10,
-      updatedAt: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
-      color: group?.color ?? ["#6C63FF", "#22D3EE", "#10B981", "#F59E0B", "#EC4899"][Math.floor(Math.random() * 5)],
-    };
-    setSaved(true);
-    setTimeout(() => { onSave(g); onClose(); }, 900);
+    setSaving(true);
+    setError("");
+    try {
+      const url = group ? `/api/groups/${group.id}` : "/api/groups";
+      const method = group ? "PATCH" : "POST";
+      const res = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, description, color }),
+      });
+      if (res.ok) {
+        setSaved(true);
+        setTimeout(() => { onSaved(); onClose(); }, 900);
+      } else {
+        const d = await res.json() as { error?: string };
+        setError(d.error ?? "Failed to save group.");
+      }
+    } catch {
+      setError("Network error.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div
-        className="relative w-full max-w-md rounded-2xl overflow-hidden"
-        style={{ background: "#0A111B", border: "1px solid rgba(255,255,255,0.1)" }}
-        onClick={e => e.stopPropagation()}
-      >
+      <div className="relative w-full max-w-md rounded-2xl overflow-hidden" style={{ background: "#0A111B", border: "1px solid rgba(255,255,255,0.1)" }} onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: "rgba(255,255,255,0.07)" }}>
           <h2 className="text-[15px] font-semibold" style={{ color: "#F5F7FA" }}>{group ? "Edit Group" : "Create Group"}</h2>
           <button onClick={onClose}><X size={16} style={{ color: "#8B95A7" }} /></button>
@@ -78,44 +84,39 @@ function GroupModal({ group, onClose, onSave }: {
                 <input
                   value={description}
                   onChange={e => setDescription(e.target.value)}
-                  placeholder="Describe this group…"
+                  placeholder="Optional description"
                   className="w-full px-3 py-2.5 rounded-lg text-[13px] outline-none"
                   style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" }}
                 />
               </div>
               <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2" style={{ color: "#8B95A7", opacity: 0.6 }}>Filter Rules (optional)</label>
-                <div className="flex flex-col gap-1.5 max-h-44 overflow-y-auto">
-                  {RULE_OPTIONS.map(r => (
+                <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2" style={{ color: "#8B95A7", opacity: 0.6 }}>Color</label>
+                <div className="flex gap-2 flex-wrap">
+                  {GROUP_COLORS.map(c => (
                     <button
-                      key={r}
-                      className="flex items-center gap-2.5 p-2.5 rounded-lg text-left transition-colors text-[12.5px]"
-                      style={{
-                        background: rules.includes(r) ? "rgba(108,99,255,0.1)" : "rgba(255,255,255,0.03)",
-                        border: `1px solid ${rules.includes(r) ? "rgba(108,99,255,0.25)" : "rgba(255,255,255,0.06)"}`,
-                        color: rules.includes(r) ? "#8B85FF" : "#8B95A7",
-                      }}
-                      onClick={() => toggleRule(r)}
+                      key={c}
+                      onClick={() => setColor(c)}
+                      className="w-7 h-7 rounded-full flex items-center justify-center transition-transform"
+                      style={{ background: c, transform: color === c ? "scale(1.2)" : "scale(1)", outline: color === c ? `2px solid ${c}` : "none", outlineOffset: 2 }}
                     >
-                      <div className="w-4 h-4 rounded flex items-center justify-center shrink-0" style={{ background: rules.includes(r) ? "#6C63FF" : "rgba(255,255,255,0.08)" }}>
-                        {rules.includes(r) && <Check size={9} style={{ color: "#fff" }} />}
-                      </div>
-                      {r}
+                      {color === c && <Check size={11} color="white" strokeWidth={3} />}
                     </button>
                   ))}
                 </div>
               </div>
+              {error && <div className="text-[12px]" style={{ color: "#EF4444" }}>{error}</div>}
             </div>
-
-            <div className="flex items-center justify-between px-6 py-4 border-t" style={{ borderColor: "rgba(255,255,255,0.07)" }}>
-              <button className="text-[13px] font-medium px-4 py-2 rounded-lg" style={{ color: "#8B95A7", background: "rgba(255,255,255,0.04)" }} onClick={onClose}>Cancel</button>
+            <div className="flex gap-3 px-6 pb-5">
+              <button onClick={onClose} className="flex-1 py-2.5 rounded-xl text-[13px] font-medium" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#8B95A7" }}>
+                Cancel
+              </button>
               <button
-                className="text-[13px] font-semibold px-5 py-2 rounded-lg text-white disabled:opacity-40"
-                style={{ background: "#6C63FF" }}
-                disabled={!name.trim()}
                 onClick={handleSave}
+                disabled={!name.trim() || saving}
+                className="flex-1 py-2.5 rounded-xl text-[13px] font-semibold text-white"
+                style={{ background: "#6C63FF", opacity: !name.trim() || saving ? 0.5 : 1 }}
               >
-                {group ? "Save changes" : "Create group"}
+                {saving ? "Saving…" : group ? "Save Changes" : "Create Group"}
               </button>
             </div>
           </>
@@ -125,111 +126,108 @@ function GroupModal({ group, onClose, onSave }: {
   );
 }
 
-export default function GroupsPage() {
-  const [groups, setGroups] = useState<Group[]>(DEMO_GROUPS);
-  const [modalOpen, setModalOpen] = useState(false);
-  const [editing, setEditing] = useState<Group | undefined>();
+// ── Main Page ─────────────────────────────────────────────────────────────────
 
-  const handleSave = (g: Group) => {
-    setGroups(prev => {
-      const idx = prev.findIndex(x => x.id === g.id);
-      if (idx >= 0) return prev.map(x => x.id === g.id ? g : x);
-      return [g, ...prev];
-    });
+export default function GroupsPage() {
+  const [groups, setGroups] = useState<GroupItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [modal, setModal] = useState<"create" | GroupItem | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+
+  const load = () => {
+    setLoading(true);
+    fetch("/api/groups")
+      .then(r => r.ok ? r.json() : null)
+      .then((d: { groups?: GroupItem[] } | null) => { if (d?.groups) setGroups(d.groups); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const deleteGroup = async (id: string) => {
+    setDeleting(id);
+    await fetch(`/api/groups/${id}`, { method: "DELETE" }).catch(() => {});
+    setGroups(prev => prev.filter(g => g.id !== id));
+    setDeleting(null);
   };
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto">
       <div className="flex items-start justify-between mb-6">
         <div>
-          <h1 className="text-[20px] font-semibold mb-1" style={{ color: "#F5F7FA" }}>Customer Groups</h1>
-          <p className="text-[13px]" style={{ color: "#8B95A7" }}>Organize your audience into segments for targeted messaging.</p>
+          <h1 className="text-[20px] font-semibold mb-1" style={{ color: "#F5F7FA" }}>Groups</h1>
+          <p className="text-[13px]" style={{ color: "#8B95A7" }}>Organize your audience into segments for targeted broadcasts.</p>
         </div>
         <button
-          className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-[13px] font-semibold text-white"
-          style={{ background: "#6C63FF", boxShadow: "0 0 20px rgba(108,99,255,0.25)" }}
-          onClick={() => { setEditing(undefined); setModalOpen(true); }}
+          onClick={() => setModal("create")}
+          className="flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-semibold text-white"
+          style={{ background: "#6C63FF" }}
         >
-          <Plus size={15} /> Create Group
+          <Plus size={14} /> New Group
         </button>
       </div>
 
-      <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {groups.map(g => (
-          <div key={g.id} className="group p-5 rounded-xl flex flex-col gap-4 transition-all hover:border-[rgba(255,255,255,0.14)]" style={{ background: "#101722", border: "1px solid rgba(255,255,255,0.08)" }}>
-            <div className="flex items-start justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: `${g.color}18` }}>
-                  <Layers size={16} style={{ color: g.color }} />
-                </div>
-                <div>
-                  <div className="text-[13.5px] font-semibold" style={{ color: "#F5F7FA" }}>{g.name}</div>
-                  <div className="text-[11px]" style={{ color: "#8B95A7" }}>{g.description}</div>
-                </div>
-              </div>
-              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button
-                  className="w-7 h-7 flex items-center justify-center rounded-lg"
-                  style={{ color: "#8B95A7", background: "rgba(255,255,255,0.04)" }}
-                  onClick={() => { setEditing(g); setModalOpen(true); }}
-                >
-                  <span style={{ fontSize: 11 }}>✏</span>
-                </button>
-                <button
-                  className="w-7 h-7 flex items-center justify-center rounded-lg"
-                  style={{ color: "#EF4444", background: "rgba(239,68,68,0.1)" }}
-                  onClick={() => setGroups(prev => prev.filter(x => x.id !== g.id))}
-                >
-                  <Trash2 size={12} />
-                </button>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1.5 text-[13px] font-semibold" style={{ color: "#F5F7FA" }}>
-                <Users size={13} style={{ color: g.color }} />
-                {g.count.toLocaleString()} customers
-              </div>
-            </div>
-
-            <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.06)" }}>
-              <div className="h-full rounded-full transition-all" style={{ background: g.color, width: `${Math.min((g.count / 400) * 100, 100)}%` }} />
-            </div>
-
-            <div className="flex items-center justify-between pt-1 border-t" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
-              <span className="text-[10.5px]" style={{ color: "#8B95A7" }}>Updated {g.updatedAt}</span>
-              <button
-                className="text-[11px] font-medium"
-                style={{ color: "#6C63FF" }}
-                onClick={() => { setEditing(g); setModalOpen(true); }}
-              >
-                Edit
-              </button>
-            </div>
+      {loading ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="h-28 rounded-xl animate-pulse" style={{ background: "rgba(255,255,255,0.04)" }} />
+          ))}
+        </div>
+      ) : groups.length === 0 ? (
+        <div className="py-20 flex flex-col items-center justify-center gap-3">
+          <Layers size={36} style={{ color: "#8B95A7", opacity: 0.25 }} />
+          <div className="text-[15px] font-semibold" style={{ color: "#F5F7FA" }}>No groups yet</div>
+          <div className="text-[13px] text-center max-w-xs" style={{ color: "#8B95A7" }}>
+            Create groups to segment your audience and target specific subscriber types.
           </div>
-        ))}
-
-        <button
-          className="flex flex-col items-center justify-center gap-2 p-5 rounded-xl border-2 border-dashed min-h-[160px] transition-all"
-          style={{ borderColor: "rgba(255,255,255,0.1)", color: "#8B95A7" }}
-          onClick={() => { setEditing(undefined); setModalOpen(true); }}
-          onMouseEnter={e => { e.currentTarget.style.borderColor = "rgba(108,99,255,0.35)"; e.currentTarget.style.color = "#8B85FF"; }}
-          onMouseLeave={e => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; e.currentTarget.style.color = "#8B95A7"; }}
-        >
-          <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: "rgba(255,255,255,0.04)" }}>
-            <Plus size={16} />
-          </div>
-          <span className="text-[13px] font-semibold">Create Group</span>
-        </button>
-      </div>
-
-      {modalOpen && (
-        <GroupModal
-          group={editing}
-          onClose={() => { setModalOpen(false); setEditing(undefined); }}
-          onSave={handleSave}
-        />
+          <button
+            onClick={() => setModal("create")}
+            className="mt-2 flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-semibold text-white"
+            style={{ background: "#6C63FF" }}
+          >
+            <Plus size={14} /> Create Group
+          </button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {groups.map(g => (
+            <div key={g.id} className="p-4 rounded-xl" style={{ background: "#101722", border: "1px solid rgba(255,255,255,0.07)" }}>
+              <div className="flex items-start justify-between mb-3">
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: `${g.color}1A` }}>
+                  <Layers size={18} style={{ color: g.color }} />
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setModal(g)}
+                    className="w-7 h-7 flex items-center justify-center rounded-lg"
+                    style={{ background: "rgba(255,255,255,0.04)", color: "#8B95A7" }}
+                  >
+                    <Edit2 size={12} />
+                  </button>
+                  <button
+                    onClick={() => deleteGroup(g.id)}
+                    disabled={deleting === g.id}
+                    className="w-7 h-7 flex items-center justify-center rounded-lg"
+                    style={{ background: "rgba(239,68,68,0.06)", color: "#EF4444" }}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              </div>
+              <div className="text-[14px] font-semibold mb-1" style={{ color: "#F5F7FA" }}>{g.name}</div>
+              {g.description && <div className="text-[11.5px] mb-2" style={{ color: "#8B95A7" }}>{g.description}</div>}
+              <div className="flex items-center gap-1.5 text-[11.5px]" style={{ color: "#8B95A7" }}>
+                <Users size={11} />
+                <span>{(g._count?.members ?? 0).toLocaleString()} members</span>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
+
+      {modal === "create" && <GroupModal onClose={() => setModal(null)} onSaved={load} />}
+      {modal && modal !== "create" && <GroupModal group={modal} onClose={() => setModal(null)} onSaved={load} />}
     </div>
   );
 }

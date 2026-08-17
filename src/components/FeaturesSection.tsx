@@ -5,22 +5,23 @@ import {
   Radio,
   Layers,
   ArrowRight,
-  Circle,
   Check,
   Search,
   Filter,
   Plus,
 } from "lucide-react";
 
+function FbIcon({ size = 16, style }: { size?: number; style?: React.CSSProperties }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" style={style}>
+      <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z" />
+    </svg>
+  );
+}
+
 // ── Feature 1: Inbox UI ──────────────────────────────────────────────────────
 
 function InboxUI() {
-  const convos = [
-    { name: "Sarah M.", avatar: "SM", color: "#6C63FF", msg: "Hi! I saw your post...", time: "2m", unread: 2, status: "active" },
-    { name: "James O.", avatar: "JO", color: "#22D3EE", msg: "Can I get more details?", time: "14m", unread: 0, status: "waiting" },
-    { name: "Priya S.", avatar: "PS", color: "#10B981", msg: "Arrived perfectly, thank you!", time: "1h", unread: 0, status: "resolved" },
-    { name: "Carlos V.", avatar: "CV", color: "#F59E0B", msg: "Do you have this in size M?", time: "2h", unread: 1, status: "active" },
-  ];
   return (
     <div
       className="rounded-xl overflow-hidden"
@@ -40,44 +41,30 @@ function InboxUI() {
           <div className="px-4 py-3">
             <div className="flex items-center justify-between mb-2">
               <span className="text-[12px] font-semibold text-[#F5F7FA]">Conversations</span>
-              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full" style={{ background: "rgba(108,99,255,0.12)", color: "#6C63FF" }}>4</span>
+              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full" style={{ background: "rgba(108,99,255,0.12)", color: "#6C63FF" }}>0</span>
             </div>
             <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg" style={{ background: "rgba(255,255,255,0.04)" }}>
               <Search size={10} className="text-[#8B95A7]" />
               <span className="text-[10px] text-[#8B95A7]">Search...</span>
             </div>
           </div>
-          {convos.map((c, i) => (
-            <div key={i} className={`flex items-start gap-2.5 px-4 py-3 cursor-pointer transition-colors ${i === 0 ? "bg-[rgba(108,99,255,0.06)]" : "hover:bg-[rgba(255,255,255,0.02)]"}`}>
-              <div className="w-7 h-7 rounded-full flex items-center justify-center text-[9px] font-bold text-white shrink-0" style={{ background: c.color }}>{c.avatar}</div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-semibold text-[#F5F7FA]">{c.name}</span>
-                  <span className="text-[9px] text-[#8B95A7]">{c.time}</span>
-                </div>
-                <p className="text-[10px] text-[#8B95A7] truncate">{c.msg}</p>
-                <div className="flex items-center justify-between mt-0.5">
-                  <span className="text-[9px] flex items-center gap-1" style={{ color: c.status === "active" ? "#10B981" : c.status === "waiting" ? "#F59E0B" : "#8B95A7" }}>
-                    <Circle size={4} fill="currentColor" />{c.status}
-                  </span>
-                  {c.unread > 0 && (
-                    <span className="w-3.5 h-3.5 rounded-full flex items-center justify-center text-[8px] font-bold text-white" style={{ background: "#6C63FF" }}>{c.unread}</span>
-                  )}
-                </div>
-              </div>
+          <div className="flex flex-col items-center justify-center py-10 gap-2.5 px-4 text-center">
+            <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background: "rgba(108,99,255,0.1)" }}>
+              <MessageSquare size={14} style={{ color: "#6C63FF" }} />
             </div>
-          ))}
+            <p className="text-[10.5px] text-[#8B95A7] leading-relaxed">
+              Connect a Facebook Page to start receiving messages.
+            </p>
+          </div>
         </div>
         {/* Chat preview */}
-        <div className="w-40 border-l p-3 hidden sm:flex flex-col" style={{ borderColor: "rgba(255,255,255,0.05)" }}>
-          <div className="flex items-center gap-2 mb-3">
-            <div className="w-6 h-6 rounded-full bg-[#6C63FF] flex items-center justify-center text-[8px] font-bold text-white">SM</div>
-            <span className="text-[10px] font-semibold text-[#F5F7FA]">Sarah M.</span>
+        <div className="w-40 border-l p-3 hidden sm:flex flex-col items-center justify-center gap-2" style={{ borderColor: "rgba(255,255,255,0.05)" }}>
+          <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background: "rgba(108,99,255,0.1)" }}>
+            <FbIcon size={15} style={{ color: "#6C63FF" }} />
           </div>
-          <div className="flex flex-col gap-2 flex-1">
-            <div className="self-start text-[9.5px] text-[#F5F7FA] px-2 py-1.5 rounded-xl rounded-tl-none max-w-full" style={{ background: "rgba(255,255,255,0.06)" }}>Hi! I saw your post about the new collection...</div>
-            <div className="self-end text-[9.5px] text-white px-2 py-1.5 rounded-xl rounded-tr-none" style={{ background: "#6C63FF" }}>Hi Sarah! Let me help you.</div>
-          </div>
+          <p className="text-[9.5px] text-[#8B95A7] text-center leading-relaxed">
+            Messages appear here when a customer writes.
+          </p>
         </div>
       </div>
     </div>
@@ -87,12 +74,6 @@ function InboxUI() {
 // ── Feature 2: Audience UI ───────────────────────────────────────────────────
 
 function AudienceUI() {
-  const customers = [
-    { name: "Sarah Mitchell", page: "Bloom Fashion", tag: "VIP", activity: "Today", status: "active" },
-    { name: "James Okafor", page: "Urban Threads", tag: "Lead", activity: "Yesterday", status: "new" },
-    { name: "Priya Sharma", page: "Bloom Fashion", tag: "Customer", activity: "3 days", status: "active" },
-    { name: "Carlos Vega", page: "Urban Threads", tag: "Customer", activity: "1 week", status: "inactive" },
-  ];
   return (
     <div className="rounded-xl overflow-hidden" style={{ background: "#0B0F16", border: "1px solid rgba(255,255,255,0.06)" }}>
       <div className="flex items-center gap-2 px-4 py-2.5 border-b" style={{ borderColor: "rgba(255,255,255,0.05)", background: "#07090D" }}>
@@ -123,17 +104,14 @@ function AudienceUI() {
             <span key={h} className="text-[9.5px] font-semibold uppercase tracking-wider text-[#8B95A7]/50">{h}</span>
           ))}
         </div>
-        {customers.map((c, i) => (
-          <div key={i} className="grid grid-cols-4 items-center px-4 py-2.5 hover:bg-[rgba(255,255,255,0.02)] cursor-pointer transition-colors">
-            <div className="flex items-center gap-2">
-              <div className="w-5 h-5 rounded-full bg-[#6C63FF]/40 flex items-center justify-center text-[8px] font-bold text-white">{c.name.split(" ").map(n => n[0]).join("")}</div>
-              <span className="text-[10.5px] font-medium text-[#F5F7FA] truncate">{c.name.split(" ")[0]}</span>
-            </div>
-            <span className="text-[10px] text-[#8B95A7] truncate">{c.page}</span>
-            <span className="inline-flex w-fit text-[9px] font-medium px-1.5 py-0.5 rounded-full" style={{ background: "rgba(108,99,255,0.1)", color: "#6C63FF" }}>{c.tag}</span>
-            <span className="text-[10px] text-[#8B95A7]">{c.activity}</span>
+        <div className="flex flex-col items-center justify-center py-10 gap-2.5 text-center">
+          <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background: "rgba(34,211,238,0.1)" }}>
+            <Users size={14} style={{ color: "#22D3EE" }} />
           </div>
-        ))}
+          <p className="text-[10.5px] text-[#8B95A7] leading-relaxed max-w-[180px]">
+            Audience members appear as customers start conversations.
+          </p>
+        </div>
       </div>
     </div>
   );
@@ -187,11 +165,11 @@ function TemplateUI() {
           <div className="text-[10px] font-semibold uppercase tracking-wider text-[#8B95A7]/60 mb-3">Preview</div>
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-2 mb-1">
-              <div className="w-5 h-5 rounded-full bg-[#6C63FF] flex items-center justify-center text-[8px] font-bold text-white">M</div>
-              <span className="text-[10px] font-semibold text-[#F5F7FA]">Bloom Fashion</span>
+              <div className="w-5 h-5 rounded-full bg-[#6C63FF] flex items-center justify-center text-[8px] font-bold text-white">P</div>
+              <span className="text-[10px] font-semibold text-[#F5F7FA]">Your Page</span>
             </div>
             <div className="p-2.5 rounded-xl rounded-tl-none text-[11px] text-white leading-relaxed" style={{ background: "#6C63FF" }}>
-              Hi <strong>Sarah</strong>, thanks for reaching out to <strong>Bloom Fashion</strong>! How can we help you today?
+              Hi <strong>{"{{first_name}}"}</strong>, thanks for reaching out to <strong>{"{{page_name}}"}</strong>! How can we help you today?
             </div>
             <div className="flex items-center gap-1 self-start">
               <Check size={9} style={{ color: "#10B981" }} />
@@ -232,16 +210,16 @@ function BroadcastUI() {
           <div>
             <div className="text-[10px] font-semibold uppercase tracking-wider text-[#8B95A7]/60 mb-1.5">Target page</div>
             <div className="flex items-center gap-2 p-2.5 rounded-lg" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
-              <div className="w-4 h-4 rounded-sm" style={{ background: "rgba(108,99,255,0.4)" }} />
-              <span className="text-[11px] text-[#F5F7FA]">Bloom Fashion</span>
+              <FbIcon size={12} style={{ color: "#6C63FF" }} />
+              <span className="text-[11px] text-[#8B95A7]">Select a connected page...</span>
             </div>
           </div>
           <div>
             <div className="text-[10px] font-semibold uppercase tracking-wider text-[#8B95A7]/60 mb-1.5">Eligible audience</div>
             <div className="grid grid-cols-3 gap-2">
-              {[["Total", "1,247"], ["Eligible", "843"], ["Excluded", "404"]].map(([k, v]) => (
+              {[["Total", "—"], ["Eligible", "—"], ["Excluded", "—"]].map(([k, v]) => (
                 <div key={k} className="p-2.5 rounded-lg text-center" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.05)" }}>
-                  <div className="text-[14px] font-semibold text-[#F5F7FA]">{v}</div>
+                  <div className="text-[14px] font-semibold text-[#F5F7FA]/30">{v}</div>
                   <div className="text-[9.5px] text-[#8B95A7]">{k}</div>
                 </div>
               ))}
@@ -250,7 +228,7 @@ function BroadcastUI() {
           <div>
             <div className="text-[10px] font-semibold uppercase tracking-wider text-[#8B95A7]/60 mb-1.5">Message</div>
             <div className="p-2.5 rounded-lg text-[11px] text-[#8B95A7]" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
-              Hey {"{{first_name}}"}, we have a new arrival you might love...
+              Hey {"{{first_name}}"}, we have something new you might love...
             </div>
           </div>
           <div className="flex items-center gap-2 p-2.5 rounded-lg" style={{ background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.15)" }}>
@@ -266,11 +244,6 @@ function BroadcastUI() {
 // ── Feature 5: Team UI ───────────────────────────────────────────────────────
 
 function TeamUI() {
-  const members = [
-    { name: "Alex Rivera", role: "Admin", avatar: "AR", pages: 2, active: true },
-    { name: "Maya Chen", role: "Agent", avatar: "MC", pages: 1, active: true },
-    { name: "Sam Torres", role: "Agent", avatar: "ST", pages: 2, active: false },
-  ];
   return (
     <div className="rounded-xl overflow-hidden" style={{ background: "#0B0F16", border: "1px solid rgba(255,255,255,0.06)" }}>
       <div className="flex items-center gap-2 px-4 py-2.5 border-b" style={{ borderColor: "rgba(255,255,255,0.05)", background: "#07090D" }}>
@@ -283,27 +256,25 @@ function TeamUI() {
       </div>
       <div className="p-4">
         <div className="grid grid-cols-3 gap-3 mb-4">
-          {[["Members", "3"], ["Pages", "2"], ["Active", "2"]].map(([k, v]) => (
+          {[["Members", "—"], ["Pages", "—"], ["Active", "—"]].map(([k, v]) => (
             <div key={k} className="p-3 rounded-xl text-center" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
-              <div className="text-[18px] font-semibold text-[#F5F7FA]">{v}</div>
+              <div className="text-[18px] font-semibold" style={{ color: "rgba(245,247,250,0.25)" }}>{v}</div>
               <div className="text-[10px] text-[#8B95A7]">{k}</div>
             </div>
           ))}
         </div>
-        <div className="flex flex-col gap-2">
-          {members.map((m, i) => (
-            <div key={i} className="flex items-center gap-3 p-3 rounded-xl" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.05)" }}>
-              <div className="w-7 h-7 rounded-full flex items-center justify-center text-[9px] font-bold text-white relative shrink-0" style={{ background: i === 0 ? "#6C63FF" : i === 1 ? "#22D3EE" : "#10B981" }}>
-                {m.avatar}
-                <span className={`absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full border border-[#0B0F16] ${m.active ? "bg-green-400" : "bg-[#8B95A7]"}`} />
-              </div>
-              <div className="flex-1">
-                <div className="text-[11.5px] font-semibold text-[#F5F7FA]">{m.name}</div>
-                <div className="text-[10px] text-[#8B95A7]">{m.pages} pages · {m.role}</div>
-              </div>
-              <span className="text-[9.5px] font-medium px-1.5 py-0.5 rounded-full" style={{ background: i === 0 ? "rgba(108,99,255,0.12)" : "rgba(255,255,255,0.06)", color: i === 0 ? "#6C63FF" : "#8B95A7" }}>{m.role}</span>
-            </div>
-          ))}
+        <div className="flex flex-col items-center justify-center py-8 gap-3 rounded-xl" style={{ background: "rgba(255,255,255,0.02)", border: "1px dashed rgba(255,255,255,0.07)" }}>
+          <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background: "rgba(236,72,153,0.1)" }}>
+            <Layers size={14} style={{ color: "#EC4899" }} />
+          </div>
+          <div className="text-center">
+            <p className="text-[11px] font-medium text-[#F5F7FA]">Invite your team</p>
+            <p className="text-[10px] text-[#8B95A7] mt-0.5">Add agents and assign page access.</p>
+          </div>
+          <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-medium text-white" style={{ background: "#EC4899" }}>
+            <Plus size={10} />
+            Invite member
+          </button>
         </div>
       </div>
     </div>
@@ -370,10 +341,7 @@ export default function FeaturesSection() {
     <section id="features" className="py-24 relative">
       <div
         className="absolute inset-0 pointer-events-none"
-        style={{
-          background:
-            "radial-gradient(ellipse at 50% 0%, rgba(108,99,255,0.03) 0%, transparent 60%)",
-        }}
+        style={{ background: "radial-gradient(ellipse at 50% 0%, rgba(108,99,255,0.03) 0%, transparent 60%)" }}
       />
 
       <div className="max-w-7xl mx-auto px-6">
@@ -390,18 +358,12 @@ export default function FeaturesSection() {
           {features.map((feature, i) => (
             <div
               key={i}
-              className={`grid md:grid-cols-2 gap-12 items-center ${
-                feature.reverse ? "md:[direction:rtl]" : ""
-              }`}
+              className={`grid md:grid-cols-2 gap-12 items-center ${feature.reverse ? "md:[direction:rtl]" : ""}`}
             >
               <div className={feature.reverse ? "[direction:ltr]" : ""}>
                 <div
                   className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-[11.5px] font-semibold mb-4"
-                  style={{
-                    background: `${feature.accent}12`,
-                    color: feature.accent,
-                    border: `1px solid ${feature.accent}25`,
-                  }}
+                  style={{ background: `${feature.accent}12`, color: feature.accent, border: `1px solid ${feature.accent}25` }}
                 >
                   <feature.icon size={12} />
                   {feature.eyebrow}
@@ -422,9 +384,7 @@ export default function FeaturesSection() {
                 </a>
               </div>
 
-              <div
-                className={`relative ${feature.reverse ? "[direction:ltr]" : ""}`}
-              >
+              <div className={`relative ${feature.reverse ? "[direction:ltr]" : ""}`}>
                 <div
                   className="absolute -inset-6 rounded-3xl pointer-events-none"
                   style={{

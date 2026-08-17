@@ -47,6 +47,7 @@ export type WorkspaceState = {
   renewalDate: string;
   connectedPageIds: string[];
   pages: WorkspacePage[];
+  pagesLoaded: boolean;
   teamMemberCount: number;
   creditActivity: CreditActivity[];
   userName: string | null;
@@ -62,6 +63,7 @@ type WorkspaceCtx = WorkspaceState & {
   upgradePlan: (planId: PlanId) => void;
   connectPage: (pageId: string) => boolean;
   disconnectPage: (pageId: string) => void;
+  reloadPages: () => void;
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -111,6 +113,7 @@ export function WorkspaceProvider({
     renewalDate: formatDate(initialLedger?.periodEnd),
     connectedPageIds: [],
     pages: [],
+    pagesLoaded: false,
     teamMemberCount: 1,
     creditActivity: [],
     userName: initialUserName,
@@ -155,26 +158,30 @@ export function WorkspaceProvider({
       .catch(() => {});
   }, []);
 
-  // Fetch connected Facebook pages
-  useEffect(() => {
-    fetch("/api/pages")
+  // Fetch connected (active) Facebook pages
+  const fetchPages = useCallback(() => {
+    fetch("/api/pages?activeOnly=true")
       .then(r => r.ok ? r.json() : null)
-      .then((data: { pages?: Array<{ id: string; name: string; pageId: string }> } | null) => {
-        if (!data?.pages) return;
-        const pages: WorkspacePage[] = data.pages.map(p => ({
-          id: p.id,
-          name: p.name,
-          color: derivedPageColor(p.name),
-          avatar: derivedPageAvatar(p.name),
-        }));
+      .then((data: { pages?: Array<{ id: string; pageName?: string; name?: string; pageId: string }> } | null) => {
+        const pages: WorkspacePage[] = (data?.pages ?? []).map(p => {
+          const name = p.pageName ?? p.name ?? "Unknown Page";
+          return { id: p.id, name, color: derivedPageColor(name), avatar: derivedPageAvatar(name) };
+        });
         setState(prev => ({
           ...prev,
           pages,
+          pagesLoaded: true,
           connectedPageIds: pages.map(p => p.id),
         }));
       })
-      .catch(() => {});
+      .catch(() => {
+        setState(prev => ({ ...prev, pagesLoaded: true }));
+      });
   }, []);
+
+  useEffect(() => { fetchPages(); }, [fetchPages]);
+
+  const reloadPages = useCallback(() => { fetchPages(); }, [fetchPages]);
 
   const plan = safePlan(state.planId);
 
@@ -262,6 +269,7 @@ export function WorkspaceProvider({
       upgradePlan,
       connectPage,
       disconnectPage,
+      reloadPages,
     }}>
       {children}
     </WorkspaceContext.Provider>
