@@ -54,6 +54,9 @@ export async function generateMetadata(): Promise<Metadata> {
       title,
       description: "Manage customer conversations from one intelligent workspace.",
     },
+    other: {
+      "facebook-domain-verification": "j52wczag8fj2t0e1vz3hmhgaot0kr",
+    },
   };
 }
 
