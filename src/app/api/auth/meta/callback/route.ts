@@ -3,19 +3,13 @@ import { cookies } from "next/headers";
 import { getWorkspace } from "@/lib/api-helpers";
 import { prisma } from "@/lib/db";
 import { encryptToken } from "@/lib/token-crypto";
+import { metaCallbackUrl } from "@/lib/meta-oauth";
 
 const GRAPH = "https://graph.facebook.com/v19.0";
 
 type TokenResp = { access_token?: string; error?: { message: string } };
 type FBPage   = { id: string; name: string; category?: string; access_token: string; picture?: { data?: { url?: string } } };
 type AccountsResp = { data?: FBPage[]; error?: { message: string } };
-
-function callbackUrl(req: Request): string {
-  const base =
-    process.env.NEXT_PUBLIC_APP_URL ??
-    `${new URL(req.url).protocol}//${new URL(req.url).host}`;
-  return `${base}/api/auth/meta/callback`;
-}
 
 export async function GET(req: Request) {
   const url  = new URL(req.url);
@@ -24,9 +18,11 @@ export async function GET(req: Request) {
   const fbErr = url.searchParams.get("error");
 
   if (fbErr) {
+    console.warn("[meta/callback] Facebook returned error", { fbErr });
     return NextResponse.redirect(new URL("/app/pages?error=denied", req.url));
   }
   if (!code || !state) {
+    console.warn("[meta/callback] Missing code or state params");
     return NextResponse.redirect(new URL("/app/pages?error=invalid_callback", req.url));
   }
 
@@ -34,6 +30,7 @@ export async function GET(req: Request) {
   const jar = await cookies();
   const savedState = jar.get("meta_oauth_state")?.value;
   if (!savedState || savedState !== state) {
+    console.warn("[meta/callback] CSRF state mismatch — possible replay or expired session");
     return NextResponse.redirect(new URL("/app/pages?error=invalid_state", req.url));
   }
 
@@ -44,7 +41,13 @@ export async function GET(req: Request) {
 
   const appId     = process.env.META_APP_ID!;
   const appSecret = process.env.META_APP_SECRET!;
-  const cbUrl     = callbackUrl(req);
+  const cbUrl     = metaCallbackUrl(req);
+
+  console.log("[meta/callback] starting token exchange", {
+    env: process.env.NODE_ENV,
+    callbackHost: new URL(cbUrl).host,
+    workspaceId: ws.id,
+  });
 
   try {
     // 1 — Short-lived user token
@@ -56,9 +59,10 @@ export async function GET(req: Request) {
 
     const t1 = await (await fetch(t1url.toString())).json() as TokenResp;
     if (!t1.access_token) {
-      console.error("[meta/callback] short-lived token failed:", t1.error);
+      console.error("[meta/callback] short-lived token exchange failed:", t1.error?.message ?? "unknown error");
       return redirect(req, "token_error");
     }
+    console.log("[meta/callback] short-lived token obtained");
 
     // 2 — Long-lived user token (best-effort; fall back to short-lived)
     const t2url = new URL(`${GRAPH}/oauth/access_token`);
@@ -69,6 +73,7 @@ export async function GET(req: Request) {
 
     const t2 = await (await fetch(t2url.toString())).json() as TokenResp;
     const userToken = t2.access_token ?? t1.access_token;
+    console.log("[meta/callback] user token ready", { longLived: !!t2.access_token });
 
     // 3 — Fetch pages the user manages
     const pUrl = new URL(`${GRAPH}/me/accounts`);
@@ -79,12 +84,15 @@ export async function GET(req: Request) {
     const pData = await (await fetch(pUrl.toString())).json() as AccountsResp;
 
     if (pData.error) {
-      console.error("[meta/callback] me/accounts failed:", pData.error);
+      console.error("[meta/callback] me/accounts failed:", pData.error.message);
       return redirect(req, "token_error");
     }
     if (!pData.data?.length) {
+      console.warn("[meta/callback] no pages returned for this user");
       return redirect(req, "no_pages");
     }
+
+    console.log("[meta/callback] upserting pages", { count: pData.data.length });
 
     // 4 — Upsert each page as isActive: false (pending user selection)
     //     Token is encrypted at rest before being written to DB.
@@ -115,6 +123,7 @@ export async function GET(req: Request) {
       });
     }
 
+    console.log("[meta/callback] OAuth complete — redirecting to page selection");
     const dest = new URL("/app/pages", req.url);
     dest.searchParams.set("flow", "select");
     const res = NextResponse.redirect(dest.toString());
@@ -122,7 +131,7 @@ export async function GET(req: Request) {
     return res;
 
   } catch (e) {
-    console.error("[meta/callback]", e);
+    console.error("[meta/callback] unexpected error:", e instanceof Error ? e.message : String(e));
     return redirect(req, "server_error");
   }
 }
