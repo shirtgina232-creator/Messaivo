@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { getWorkspace } from "@/lib/api-helpers";
 import { prisma } from "@/lib/db";
+import { encryptToken } from "@/lib/token-crypto";
 
 const GRAPH = "https://graph.facebook.com/v19.0";
 
@@ -86,23 +87,26 @@ export async function GET(req: Request) {
     }
 
     // 4 — Upsert each page as isActive: false (pending user selection)
+    //     Token is encrypted at rest before being written to DB.
     for (const p of pData.data) {
       if (!p.access_token) continue;
+      const encryptedToken = encryptToken(p.access_token);
       await prisma.facebookPage.upsert({
         where: { workspaceId_pageId: { workspaceId: ws.id, pageId: p.id } },
         update: {
-          pageName:     p.name,
-          accessToken:  p.access_token,
-          pageCategory: p.category ?? null,
-          pageAvatar:   p.picture?.data?.url ?? null,
-          isActive:     false,
-          lastSyncedAt: new Date(),
+          pageName:          p.name,
+          accessToken:       encryptedToken,
+          pageCategory:      p.category ?? null,
+          pageAvatar:        p.picture?.data?.url ?? null,
+          isActive:          false,
+          webhookSubscribed: false, // reset on re-auth so re-activation re-subscribes
+          lastSyncedAt:      new Date(),
         },
         create: {
           workspaceId:  ws.id,
           pageId:       p.id,
           pageName:     p.name,
-          accessToken:  p.access_token,
+          accessToken:  encryptedToken,
           pageCategory: p.category ?? null,
           pageAvatar:   p.picture?.data?.url ?? null,
           isActive:     false,

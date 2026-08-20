@@ -67,8 +67,10 @@ model FacebookPage {
   instagramAccountId String?
   instagramUsername  String?
 
-  lastSyncedAt DateTime?
-  isActive     Boolean   @default(true)
+  lastSyncedAt      DateTime?
+  isActive          Boolean   @default(true)
+  webhookSubscribed Boolean   @default(false)
+  tokenExpiresAt    DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

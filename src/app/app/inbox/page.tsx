@@ -77,7 +77,7 @@ export default function InboxPage() {
   const [profileVisible, setProfileVisible] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Load conversations
+  // Load conversations (initial + filter changes)
   const loadConversations = useCallback(() => {
     setLoadingConvs(true);
     const params = new URLSearchParams({ limit: "50" });
@@ -97,6 +97,35 @@ export default function InboxPage() {
   }, [pageFilter, activeId]);
 
   useEffect(() => { loadConversations(); }, [pageFilter]);
+
+  // Poll conversation list every 15 seconds for new inbound messages
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const params = new URLSearchParams({ limit: "50" });
+      if (pageFilter !== "all") params.set("pageId", pageFilter);
+      fetch(`/api/conversations?${params}`)
+        .then(r => r.ok ? r.json() : null)
+        .then((d: { conversations?: Conversation[] } | null) => {
+          if (d?.conversations) setConversations(d.conversations);
+        })
+        .catch(() => {});
+    }, 15_000);
+    return () => clearInterval(interval);
+  }, [pageFilter]);
+
+  // Poll active conversation messages every 10 seconds
+  useEffect(() => {
+    if (!activeId) return;
+    const interval = setInterval(() => {
+      fetch(`/api/conversations/${activeId}/messages?limit=50`)
+        .then(r => r.ok ? r.json() : null)
+        .then((d: { messages?: Message[] } | null) => {
+          if (d?.messages) setMessages(d.messages);
+        })
+        .catch(() => {});
+    }, 10_000);
+    return () => clearInterval(interval);
+  }, [activeId]);
 
   // Load messages when active conversation changes
   useEffect(() => {

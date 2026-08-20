@@ -2,6 +2,8 @@ import { prisma } from "@/lib/db";
 import {
   getWorkspace, unauthorized, notFound, badRequest, serverError, ok, noContent,
 } from "@/lib/api-helpers";
+import { decryptToken } from "@/lib/token-crypto";
+import { subscribePageToWebhook } from "@/lib/meta-graph";
 
 // Fields returned to the client — accessToken is intentionally excluded
 const PAGE_SELECT = {
@@ -13,6 +15,7 @@ const PAGE_SELECT = {
   instagramAccountId: true,
   instagramUsername: true,
   isActive: true,
+  webhookSubscribed: true,
   lastSyncedAt: true,
   createdAt: true,
   updatedAt: true,
@@ -51,7 +54,7 @@ export async function PATCH(
     const { id } = await params;
     const existing = await prisma.facebookPage.findFirst({
       where: { id, workspaceId: ws.id },
-      select: { id: true },
+      select: { id: true, pageId: true, accessToken: true, isActive: true, webhookSubscribed: true },
     });
     if (!existing) return notFound("Page not found");
 
@@ -63,16 +66,42 @@ export async function PATCH(
     }
 
     const { isActive, pageName } = body as Record<string, unknown>;
+
     const updated = await prisma.facebookPage.update({
       where: { id },
       data: {
         ...(typeof isActive === "boolean" && { isActive }),
         ...(typeof pageName === "string" && pageName.trim() && { pageName: pageName.trim() }),
       },
-      select: PAGE_SELECT,
+      select: { ...PAGE_SELECT, accessToken: true },
     });
 
-    return ok({ page: updated });
+    // When a page is activated for the first time (or re-activated without a webhook subscription),
+    // subscribe it to the required Messenger webhook fields.
+    if (isActive === true && !existing.webhookSubscribed) {
+      try {
+        const plainToken = decryptToken(updated.accessToken);
+        const result = await subscribePageToWebhook(plainToken, existing.pageId);
+        if (result.success) {
+          await prisma.facebookPage.update({
+            where: { id },
+            data: { webhookSubscribed: true },
+          });
+        } else {
+          // Non-fatal: page is activated but webhook subscription failed.
+          // User may need to complete Meta App Review or set META_APP_SECRET.
+          console.warn(
+            `[pages/[id]] Webhook subscription failed for page ${existing.pageId}: ${result.error}`
+          );
+        }
+      } catch (err) {
+        console.warn("[pages/[id]] Error subscribing page to webhook:", err);
+      }
+    }
+
+    // Return page without accessToken
+    const { accessToken: _omit, ...pageForClient } = updated;
+    return ok({ page: pageForClient });
   } catch (e) {
     console.error("[PATCH /api/pages/[id]]", e);
     return serverError();
