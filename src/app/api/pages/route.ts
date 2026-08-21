@@ -12,6 +12,8 @@ const PAGE_SELECT = {
   instagramUsername: true,
   isActive: true,
   lastSyncedAt: true,
+  scanStatus: true,
+  lastScannedAt: true,
   createdAt: true,
 } as const;
 

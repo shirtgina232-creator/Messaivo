@@ -71,6 +71,8 @@ model FacebookPage {
   isActive          Boolean   @default(true)
   webhookSubscribed Boolean   @default(false)
   tokenExpiresAt    DateTime?
+  scanStatus        String    @default("idle")
+  lastScannedAt     DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

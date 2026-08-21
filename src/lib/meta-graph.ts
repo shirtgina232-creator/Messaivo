@@ -56,6 +56,84 @@ export async function sendMessengerMessage(
   return { messageId: data.message_id ?? null, error: null, errorCode: null };
 }
 
+// ── Conversation scan ─────────────────────────────────────────────────────────
+
+export interface MetaConversationParticipant {
+  id: string;
+  name?: string;
+}
+
+export interface MetaConversationMessage {
+  id: string;
+  message?: string;
+  from?: { id: string; name?: string };
+  created_time: string;
+}
+
+export interface MetaConversation {
+  id: string;
+  participants: { data: MetaConversationParticipant[] };
+  messages?: {
+    data: MetaConversationMessage[];
+    paging?: { cursors?: { after?: string }; next?: string };
+  };
+}
+
+export interface ConversationPageResult {
+  conversations: MetaConversation[];
+  nextCursor: string | null;
+  error: string | null;
+}
+
+/**
+ * Fetch one page of Messenger conversations for a Facebook Page.
+ * Returns up to 20 threads with their most recent messages.
+ * Token must already be decrypted before passing here.
+ */
+export async function fetchConversationPage(
+  pageAccessToken: string,
+  metaPageId: string,
+  afterCursor?: string | null,
+): Promise<ConversationPageResult> {
+  const url = new URL(`${GRAPH}/${metaPageId}/conversations`);
+  url.searchParams.set("platform", "messenger");
+  url.searchParams.set("fields", "id,participants,messages{id,message,from,created_time}");
+  url.searchParams.set("limit", "20");
+  url.searchParams.set("access_token", pageAccessToken);
+  if (afterCursor) url.searchParams.set("after", afterCursor);
+
+  type ApiResp = {
+    data?: MetaConversation[];
+    paging?: { cursors?: { after?: string }; next?: string };
+    error?: { message: string; code?: number };
+  };
+
+  let res: Response;
+  try {
+    res = await fetch(url.toString());
+  } catch (err) {
+    return { conversations: [], nextCursor: null, error: `Network error: ${String(err)}` };
+  }
+
+  let body: ApiResp;
+  try {
+    body = await res.json() as ApiResp;
+  } catch {
+    return { conversations: [], nextCursor: null, error: `Non-JSON response (HTTP ${res.status})` };
+  }
+
+  if (!res.ok || body.error) {
+    return {
+      conversations: [],
+      nextCursor: null,
+      error: body.error?.message ?? `HTTP ${res.status}`,
+    };
+  }
+
+  const nextCursor = body.paging?.next ? (body.paging.cursors?.after ?? null) : null;
+  return { conversations: body.data ?? [], nextCursor, error: null };
+}
+
 export interface SubscribeResult {
   success: boolean;
   error: string | null;

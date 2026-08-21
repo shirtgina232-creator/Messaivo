@@ -84,6 +84,10 @@ export async function POST(req: Request) {
     return new Response("OK", { status: 200 });
   }
 
+  const entryCount = payload.entry?.length ?? 0;
+  const eventCount = payload.entry?.reduce((n, e) => n + (e.messaging?.length ?? 0), 0) ?? 0;
+  console.log(`[Meta webhook] Received ${entryCount} entries, ${eventCount} messaging events`);
+
   // Respond to Meta immediately — process events in the same request but don't let
   // any single event failure block the 200 response Meta needs within 20 seconds.
   for (const entry of payload.entry ?? []) {
@@ -91,7 +95,7 @@ export async function POST(req: Request) {
       try {
         await handleMessagingEvent(event);
       } catch (err) {
-        console.error("[Meta webhook] Event handling error:", err, JSON.stringify(event));
+        console.error("[Meta webhook] Unhandled error processing event:", err, "event:", JSON.stringify(event));
       }
     }
   }
@@ -106,17 +110,30 @@ async function handleMessagingEvent(event: MetaMessagingEvent): Promise<void> {
 
   // ── Inbound message ───────────────────────────────────────────────────────────
   if (message) {
+    console.log("[Meta webhook] message event", {
+      senderId: sender.id,
+      recipientId: recipient.id,
+      mid: message.mid,
+      isEcho: message.is_echo ?? false,
+      hasText: !!message.text,
+      hasAttachment: !!message.attachments,
+    });
+
     // Skip echo events (messages sent by the Page via API, echoed back to webhook)
-    if (message.is_echo) return;
+    if (message.is_echo) {
+      console.log("[Meta webhook] skipping echo event");
+      return;
+    }
 
     const page = await prisma.facebookPage.findFirst({
       where: { pageId: recipient.id, isActive: true },
       select: { id: true, workspaceId: true },
     });
     if (!page) {
-      console.warn(`[Meta webhook] Received message for unknown/inactive page ${recipient.id}`);
+      console.warn(`[Meta webhook] No active page found in DB for pageId=${recipient.id} — check isActive flag and that this page is connected`);
       return;
     }
+    console.log(`[Meta webhook] page matched: dbId=${page.id}`);
 
     // Upsert contact
     const contact = await prisma.contact.upsert({
@@ -137,6 +154,7 @@ async function handleMessagingEvent(event: MetaMessagingEvent): Promise<void> {
         isSubscribed: true,
       },
     });
+    console.log(`[Meta webhook] contact upserted: contactId=${contact.id}`);
 
     // Upsert conversation — re-open and bump unread on new message
     const conversation = await prisma.conversation.upsert({
@@ -154,6 +172,7 @@ async function handleMessagingEvent(event: MetaMessagingEvent): Promise<void> {
         unreadCount:  1,
       },
     });
+    console.log(`[Meta webhook] conversation upserted: conversationId=${conversation.id}`);
 
     // Deduplicate — Meta can re-deliver on retry
     if (message.mid) {
@@ -161,7 +180,10 @@ async function handleMessagingEvent(event: MetaMessagingEvent): Promise<void> {
         where: { metaMessageId: message.mid },
         select: { id: true },
       });
-      if (dup) return;
+      if (dup) {
+        console.log(`[Meta webhook] duplicate message mid=${message.mid}, skipping insert`);
+        return;
+      }
     }
 
     const msgText = message.text ?? null;
@@ -174,7 +196,7 @@ async function handleMessagingEvent(event: MetaMessagingEvent): Promise<void> {
       });
     }
 
-    await prisma.message.create({
+    const saved = await prisma.message.create({
       data: {
         conversationId: conversation.id,
         metaMessageId:  message.mid ?? null,
@@ -186,11 +208,13 @@ async function handleMessagingEvent(event: MetaMessagingEvent): Promise<void> {
         sentAt:         new Date(timestamp),
       },
     });
+    console.log(`[Meta webhook] message saved: messageId=${saved.id}`);
     return;
   }
 
   // ── Delivery receipt ──────────────────────────────────────────────────────────
   if (delivery) {
+    console.log("[Meta webhook] delivery event", { senderId: sender.id, recipientId: recipient.id, watermark: delivery.watermark });
     const pageAndConv = await resolvePageConversation(recipient.id, sender.id);
     if (!pageAndConv) return;
 
@@ -211,6 +235,7 @@ async function handleMessagingEvent(event: MetaMessagingEvent): Promise<void> {
 
   // ── Read receipt ──────────────────────────────────────────────────────────────
   if (read) {
+    console.log("[Meta webhook] read event", { senderId: sender.id, recipientId: recipient.id, watermark: read.watermark });
     const pageAndConv = await resolvePageConversation(recipient.id, sender.id);
     if (!pageAndConv) return;
 

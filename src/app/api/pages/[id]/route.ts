@@ -17,6 +17,8 @@ const PAGE_SELECT = {
   isActive: true,
   webhookSubscribed: true,
   lastSyncedAt: true,
+  scanStatus: true,
+  lastScannedAt: true,
   createdAt: true,
   updatedAt: true,
 } as const;
