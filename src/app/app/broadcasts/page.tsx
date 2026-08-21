@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { Plus, Radio, X, Check, AlertCircle, Search, ChevronRight, Circle, FileText, Users } from "lucide-react";
 import { useWorkspace } from "@/lib/workspace-context";
 
@@ -238,6 +238,7 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
         pageId,
         templateId: selectedTemplate.id,
         fieldValues,
+        contactIds: [...selectedContacts],
       };
       if (schedule === "later" && schedDate) body.scheduledAt = schedDate;
 

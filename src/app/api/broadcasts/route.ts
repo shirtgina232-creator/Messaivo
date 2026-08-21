@@ -58,7 +58,7 @@ export async function POST(req: Request) {
       return badRequest("Invalid JSON body");
     }
 
-    const { name, message, pageId, templateId, fieldValues, scheduledAt } = body as Record<string, unknown>;
+    const { name, message, pageId, templateId, fieldValues, scheduledAt, contactIds } = body as Record<string, unknown>;
 
     if (!name || typeof name !== "string" || !name.trim()) return badRequest("name is required");
 
@@ -118,6 +118,19 @@ export async function POST(req: Request) {
       return badRequest("Either templateId or message is required");
     }
 
+    // Validate contactIds belong to this workspace before creating recipients
+    const validContactIds: string[] = [];
+    if (Array.isArray(contactIds) && contactIds.length > 0) {
+      const ids = (contactIds as unknown[]).filter((x): x is string => typeof x === "string");
+      if (ids.length > 0) {
+        const found = await prisma.contact.findMany({
+          where: { id: { in: ids }, workspaceId: ws.id },
+          select: { id: true },
+        });
+        found.forEach(c => validContactIds.push(c.id));
+      }
+    }
+
     const broadcast = await prisma.broadcast.create({
       data: {
         workspaceId: ws.id,
@@ -129,6 +142,12 @@ export async function POST(req: Request) {
         fieldValues: resolvedFieldValues ?? undefined,
         scheduledAt: typeof scheduledAt === "string" ? new Date(scheduledAt) : null,
         status: "draft",
+        totalRecipients: validContactIds.length,
+        recipients: validContactIds.length > 0 ? {
+          createMany: {
+            data: validContactIds.map(contactId => ({ contactId, status: "pending" })),
+          },
+        } : undefined,
       },
     });
 
