@@ -66,8 +66,8 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-full max-w-lg rounded-2xl overflow-hidden" style={{ background: "#0A111B", border: "1px solid rgba(255,255,255,0.1)" }} onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: "rgba(255,255,255,0.07)" }}>
+      <div className="relative w-full max-w-lg rounded-2xl overflow-hidden flex flex-col max-h-[85vh]" style={{ background: "#0A111B", border: "1px solid rgba(255,255,255,0.1)" }} onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-6 py-4 border-b shrink-0" style={{ borderColor: "rgba(255,255,255,0.07)" }}>
           <div>
             <h2 className="text-[15px] font-semibold" style={{ color: "#F5F7FA" }}>New Broadcast</h2>
             <p className="text-[11.5px]" style={{ color: "#8B95A7" }}>Step {step} of 3</p>
@@ -84,7 +84,7 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
           </div>
         ) : (
           <>
-            <div className="px-6 py-5 flex flex-col gap-4">
+            <div className="px-6 py-5 flex flex-col gap-4 overflow-y-auto flex-1 min-h-0">
               {/* Step 1: Page */}
               {step === 1 && (
                 <div>
@@ -176,7 +176,7 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
               )}
             </div>
 
-            <div className="flex gap-3 px-6 pb-5">
+            <div className="flex gap-3 px-6 pb-5 shrink-0 border-t" style={{ borderColor: "rgba(255,255,255,0.07)" }}>
               {step > 1 && (
                 <button
                   onClick={() => setStep(s => (s - 1) as 1 | 2 | 3)}
