@@ -109,44 +109,191 @@ function FieldInput({ field, value, onChange }: {
   );
 }
 
+// ── Field type validation helpers ─────────────────────────────────────────────
+
+function validateFieldValue(type: FieldType, value: string): string | null {
+  if (!value.trim()) return null; // empty handled separately by required check
+  if (type === "URL") {
+    try { new URL(value); return null; } catch { return `Expected a URL starting with https://`; }
+  }
+  if (type === "DATE") {
+    const d = new Date(value);
+    if (isNaN(d.getTime())) return "Expected a date (e.g. 2026-12-31)";
+    return null;
+  }
+  if (type === "NUMBER" || type === "CURRENCY") {
+    if (isNaN(Number(value))) return "Expected a number";
+    return null;
+  }
+  return null;
+}
+
+const FIELD_TYPE_LABELS: Record<FieldType, string> = {
+  TEXT: "Text", TEXTAREA: "Text", NUMBER: "Number", CURRENCY: "Currency",
+  URL: "URL", DATE: "Date", DROPDOWN: "Choice",
+};
+
 // ── Draft Detail / Send Modal ─────────────────────────────────────────────────
 
-function DraftDetailModal({ broadcast, onClose, onSent }: {
+interface EnrichedBroadcast extends BroadcastItem {
+  template?: { fields: TemplateField[] | null; content: string } | null;
+}
+
+interface TestResult {
+  contactId: string;
+  name: string;
+  success: boolean;
+  error: string | null;
+}
+
+function DraftDetailModal({ broadcast: initialBroadcast, onClose, onSent }: {
   broadcast: BroadcastItem;
   onClose: () => void;
   onSent: (updated: BroadcastItem) => void;
 }) {
   const { pages } = useWorkspace();
+
+  // Full broadcast with template fields, fetched on mount
+  const [broadcast, setBroadcast] = useState<EnrichedBroadcast>(initialBroadcast);
+  const [loadingDetails, setLoadingDetails] = useState(true);
+
+  // Editable field values (initialised from saved broadcast.fieldValues)
+  const [editValues, setEditValues] = useState<Record<string, string>>(initialBroadcast.fieldValues ?? {});
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+
+  // Test send state
+  const [testOpen, setTestOpen] = useState(false);
+  const [testContacts, setTestContacts] = useState<ContactItem[]>([]);
+  const [testContactsLoading, setTestContactsLoading] = useState(false);
+  const [testSearch, setTestSearch] = useState("");
+  const [testSelected, setTestSelected] = useState<Set<string>>(new Set());
+  const [testSending, setTestSending] = useState(false);
+  const [testResults, setTestResults] = useState<TestResult[] | null>(null);
+  const [testError, setTestError] = useState("");
+
+  // Full send state
   const [sending, setSending] = useState(false);
-  const [result, setResult] = useState<{ sent: number; failed: number; status: string } | null>(null);
-  const [error, setError] = useState("");
+  const [sendResult, setSendResult] = useState<{ sent: number; failed: number; status: string } | null>(null);
+  const [sendError, setSendError] = useState("");
 
   const page = pages.find(p => p.id === broadcast.pageId);
-  const fieldValues = broadcast.fieldValues ?? {};
-  const message = broadcast.message ?? "";
   const recipientCount = broadcast.totalRecipients ?? broadcast._count?.recipients ?? 0;
+  const templateFields = (broadcast.template?.fields ?? []) as TemplateField[];
+  const templateContent = broadcast.template?.content ?? "";
 
-  const handleSend = async () => {
-    setSending(true);
-    setError("");
+  // Live-rendered message reflects edits
+  const renderedMessage = templateContent
+    ? renderTemplate(templateContent, editValues)
+    : (broadcast.message ?? "");
+
+  const isBusy = saving || sending || testSending;
+
+  // Fetch full broadcast details (with template fields) on mount
+  useEffect(() => {
+    fetch(`/api/broadcasts/${initialBroadcast.id}`)
+      .then(r => r.ok ? r.json() : null)
+      .then((d: { broadcast?: EnrichedBroadcast } | null) => {
+        if (d?.broadcast) {
+          setBroadcast(d.broadcast);
+          // Only reset editValues if not yet dirty
+          setEditValues(prev => Object.keys(prev).length ? prev : (d.broadcast!.fieldValues ?? {}));
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoadingDetails(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Load test contacts when test panel opens
+  useEffect(() => {
+    if (!testOpen || !broadcast.pageId) return;
+    setTestContactsLoading(true);
+    const p = new URLSearchParams({ pageId: broadcast.pageId, limit: "50" });
+    if (testSearch) p.set("search", testSearch);
+    fetch(`/api/contacts?${p}`)
+      .then(r => r.ok ? r.json() : null)
+      .then((d: { contacts?: ContactItem[] } | null) => { if (d?.contacts) setTestContacts(d.contacts); })
+      .catch(() => {})
+      .finally(() => setTestContactsLoading(false));
+  }, [testOpen, testSearch, broadcast.pageId]);
+
+  const handleFieldChange = (key: string, val: string) => {
+    setEditValues(prev => ({ ...prev, [key]: val }));
+    setDirty(true);
+    setSaveError("");
+  };
+
+  const handleSaveCorrections = async () => {
+    setSaving(true);
+    setSaveError("");
     try {
-      const res = await fetch(`/api/broadcasts/${broadcast.id}/send`, { method: "POST" });
-      const data = await res.json() as {
-        status?: string;
-        sent?: number;
-        failed?: number;
-        total?: number;
-        broadcast?: BroadcastItem;
-        error?: string;
-      };
-      if (res.ok && data.broadcast) {
-        setResult({ sent: data.sent ?? 0, failed: data.failed ?? 0, status: data.status ?? "completed" });
-        onSent(data.broadcast);
+      const res = await fetch(`/api/broadcasts/${broadcast.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fieldValues: editValues }),
+      });
+      const d = await res.json() as { broadcast?: BroadcastItem; error?: string };
+      if (res.ok && d.broadcast) {
+        setBroadcast(prev => ({ ...prev, ...d.broadcast, template: prev.template }));
+        setDirty(false);
       } else {
-        setError(data.error ?? "Failed to send broadcast. Please try again.");
+        setSaveError(d.error ?? "Failed to save changes.");
       }
     } catch {
-      setError("Network error. Please try again.");
+      setSaveError("Network error saving changes.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleTestContact = (id: string) =>
+    setTestSelected(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+
+  const handleTestSend = async () => {
+    if (testSelected.size === 0) return;
+    if (dirty) { setTestError("Save your field corrections first."); return; }
+    setTestSending(true);
+    setTestError("");
+    setTestResults(null);
+    try {
+      const res = await fetch(`/api/broadcasts/${broadcast.id}/test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contactIds: [...testSelected] }),
+      });
+      const d = await res.json() as { results?: TestResult[]; error?: string };
+      if (res.ok && d.results) setTestResults(d.results);
+      else setTestError(d.error ?? "Test send failed.");
+    } catch {
+      setTestError("Network error during test send.");
+    } finally {
+      setTestSending(false);
+    }
+  };
+
+  const handleSendAll = async () => {
+    if (dirty) { setSendError("Save your field corrections before sending."); return; }
+    setSending(true);
+    setSendError("");
+    try {
+      const res = await fetch(`/api/broadcasts/${broadcast.id}/send`, { method: "POST" });
+      const d = await res.json() as {
+        status?: string; sent?: number; failed?: number; broadcast?: BroadcastItem; error?: string;
+      };
+      if (res.ok && d.broadcast) {
+        setSendResult({ sent: d.sent ?? 0, failed: d.failed ?? 0, status: d.status ?? "completed" });
+        onSent(d.broadcast);
+      } else {
+        setSendError(d.error ?? "Failed to send broadcast.");
+      }
+    } catch {
+      setSendError("Network error. Please try again.");
     } finally {
       setSending(false);
     }
@@ -154,10 +301,17 @@ function DraftDetailModal({ broadcast, onClose, onSent }: {
 
   const inp = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" };
 
+  // Count validation issues across all fields
+  const fieldWarnings = templateFields.filter(f => {
+    const warn = validateFieldValue(f.type, editValues[f.key] ?? "");
+    return !!warn;
+  }).length;
+  const fieldErrors = templateFields.filter(f => f.required && !(editValues[f.key] ?? "").trim()).length;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={!sending ? onClose : undefined} />
-      <div className="relative w-full max-w-xl rounded-2xl overflow-hidden flex flex-col max-h-[88vh]"
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={!isBusy ? onClose : undefined} />
+      <div className="relative w-full max-w-xl rounded-2xl overflow-hidden flex flex-col max-h-[90vh]"
         style={{ background: "#0A111B", border: "1px solid rgba(255,255,255,0.1)" }}
         onClick={e => e.stopPropagation()}>
 
@@ -165,30 +319,36 @@ function DraftDetailModal({ broadcast, onClose, onSent }: {
         <div className="flex items-center justify-between px-6 py-4 border-b shrink-0" style={{ borderColor: "rgba(255,255,255,0.07)" }}>
           <div>
             <h2 className="text-[15px] font-semibold" style={{ color: "#F5F7FA" }}>{broadcast.name}</h2>
-            <p className="text-[11.5px] mt-0.5" style={{ color: "#8B95A7" }}>Draft — ready to send</p>
+            <div className="flex items-center gap-2 mt-0.5">
+              <p className="text-[11.5px]" style={{ color: "#8B95A7" }}>Draft · {recipientCount} recipients</p>
+              {broadcast.templateName && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded font-medium" style={{ background: "rgba(108,99,255,0.1)", color: "#8B85FF" }}>
+                  {broadcast.templateName}
+                </span>
+              )}
+            </div>
           </div>
-          {!sending && <button onClick={onClose}><X size={16} style={{ color: "#8B95A7" }} /></button>}
+          {!isBusy && <button onClick={onClose}><X size={16} style={{ color: "#8B95A7" }} /></button>}
         </div>
 
         {/* Body */}
-        <div className="px-6 py-5 flex flex-col gap-4 overflow-y-auto flex-1 min-h-0">
-          {result ? (
-            // Result screen
+        <div className="px-6 py-5 flex flex-col gap-5 overflow-y-auto flex-1 min-h-0">
+
+          {sendResult ? (
+            // ── Result ──
             <div className="flex flex-col items-center justify-center py-8 gap-4">
               <div className="w-14 h-14 rounded-full flex items-center justify-center"
-                style={{ background: result.failed === 0 ? "rgba(16,185,129,0.15)" : "rgba(245,158,11,0.12)" }}>
-                {result.failed === 0
-                  ? <Check size={24} style={{ color: "#10B981" }} />
-                  : <Send size={22} style={{ color: "#F59E0B" }} />}
+                style={{ background: sendResult.failed === 0 ? "rgba(16,185,129,0.15)" : "rgba(245,158,11,0.12)" }}>
+                {sendResult.failed === 0 ? <Check size={24} style={{ color: "#10B981" }} /> : <Send size={22} style={{ color: "#F59E0B" }} />}
               </div>
-              <div className="text-[16px] font-semibold text-center" style={{ color: "#F5F7FA" }}>
-                {result.status === "completed" ? "Broadcast sent!" : "Broadcast failed"}
+              <div className="text-[16px] font-semibold" style={{ color: "#F5F7FA" }}>
+                {sendResult.status === "completed" ? "Broadcast sent!" : "Broadcast failed"}
               </div>
-              <div className="flex items-center gap-4 text-[13px]">
-                <span style={{ color: "#10B981" }}>{result.sent} sent</span>
-                {result.failed > 0 && <span style={{ color: "#EF4444" }}>{result.failed} failed</span>}
+              <div className="flex gap-4 text-[13px]">
+                <span style={{ color: "#10B981" }}>{sendResult.sent} delivered</span>
+                {sendResult.failed > 0 && <span style={{ color: "#EF4444" }}>{sendResult.failed} failed</span>}
               </div>
-              {result.failed > 0 && (
+              {sendResult.failed > 0 && (
                 <p className="text-[12px] text-center max-w-xs" style={{ color: "#8B95A7" }}>
                   Failed recipients may have closed their 24-hour messaging window or unsubscribed.
                 </p>
@@ -196,66 +356,210 @@ function DraftDetailModal({ broadcast, onClose, onSent }: {
               <button onClick={onClose} className="mt-2 px-5 py-2 rounded-xl text-[13px] font-semibold text-white"
                 style={{ background: "#6C63FF" }}>Done</button>
             </div>
+
           ) : (
             <>
-              {/* Summary */}
-              <div className="p-4 rounded-xl" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)" }}>
-                <div className="text-[11px] font-semibold uppercase tracking-wider mb-3" style={{ color: "#8B95A7" }}>Broadcast Summary</div>
-                <div className="flex flex-col gap-2 text-[12.5px]">
-                  <div className="flex justify-between">
-                    <span style={{ color: "#8B95A7" }}>Page</span>
-                    <span style={{ color: "#F5F7FA" }}>{page?.name ?? broadcast.pageId ?? "—"}</span>
+              {/* ── Field Values (editable) ── */}
+              {templateFields.length > 0 && (
+                <section>
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "#8B95A7" }}>
+                      Message Fields
+                    </span>
+                    {loadingDetails && <Loader2 size={12} className="animate-spin" style={{ color: "#8B95A7" }} />}
+                    {(fieldWarnings > 0 || fieldErrors > 0) && (
+                      <span className="text-[10.5px] flex items-center gap-1 px-2 py-0.5 rounded-full"
+                        style={{ background: "rgba(245,158,11,0.1)", color: "#F59E0B" }}>
+                        <AlertCircle size={10} />
+                        {fieldErrors > 0 ? `${fieldErrors} required missing` : `${fieldWarnings} type warning${fieldWarnings > 1 ? "s" : ""}`}
+                      </span>
+                    )}
                   </div>
-                  {broadcast.templateName && (
-                    <div className="flex justify-between">
-                      <span style={{ color: "#8B95A7" }}>Template</span>
-                      <span style={{ color: "#F5F7FA" }}>{broadcast.templateName}</span>
+
+                  <div className="flex flex-col gap-3">
+                    {templateFields.map(f => {
+                      const val = editValues[f.key] ?? "";
+                      const typeWarn = validateFieldValue(f.type, val);
+                      const missingRequired = f.required && !val.trim();
+                      const hasIssue = !!typeWarn || missingRequired;
+                      return (
+                        <div key={f.key}>
+                          <div className="flex items-center gap-2 mb-1.5">
+                            <label className="text-[12px] font-medium" style={{ color: "#F5F7FA" }}>
+                              {f.label}{f.required && <span style={{ color: "#EF4444" }}>*</span>}
+                            </label>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded font-mono"
+                              style={{ background: "rgba(255,255,255,0.05)", color: "#8B95A7" }}>
+                              {f.key}
+                            </span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded"
+                              style={{ background: "rgba(255,255,255,0.04)", color: "#8B95A7" }}>
+                              {FIELD_TYPE_LABELS[f.type]}
+                            </span>
+                            {hasIssue && (
+                              <AlertCircle size={12} style={{ color: missingRequired ? "#EF4444" : "#F59E0B" }} />
+                            )}
+                          </div>
+                          <FieldInput field={f} value={val} onChange={v => handleFieldChange(f.key, v)} />
+                          {typeWarn && !missingRequired && (
+                            <p className="text-[11px] mt-1 flex items-center gap-1" style={{ color: "#F59E0B" }}>
+                              <AlertCircle size={10} /> {typeWarn}
+                            </p>
+                          )}
+                          {missingRequired && (
+                            <p className="text-[11px] mt-1" style={{ color: "#EF4444" }}>This field is required</p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {dirty && (
+                    <div className="flex items-center gap-2 mt-3">
+                      <button onClick={handleSaveCorrections} disabled={saving}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold text-white"
+                        style={{ background: "#6C63FF", opacity: saving ? 0.7 : 1 }}>
+                        {saving ? <><Loader2 size={11} className="animate-spin" /> Saving…</> : <><Check size={11} /> Save corrections</>}
+                      </button>
+                      <button onClick={() => { setEditValues(broadcast.fieldValues ?? {}); setDirty(false); setSaveError(""); }}
+                        disabled={saving} className="text-[12px]" style={{ color: "#8B95A7" }}>
+                        Discard
+                      </button>
+                      {saveError && <span className="text-[11.5px]" style={{ color: "#EF4444" }}>{saveError}</span>}
                     </div>
                   )}
-                  <div className="flex justify-between">
-                    <span style={{ color: "#8B95A7" }}>Recipients</span>
-                    <span style={{ color: "#F5F7FA" }}>{recipientCount.toLocaleString()}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Field values (read-only) */}
-              {broadcast.templateName && Object.keys(fieldValues).length > 0 && (
-                <div>
-                  <div className="text-[11px] font-semibold uppercase tracking-wider mb-2" style={{ color: "#8B95A7" }}>Field Values</div>
-                  <div className="flex flex-col gap-2">
-                    {Object.entries(fieldValues).map(([key, val]) => (
-                      <div key={key} className="flex items-start gap-2 text-[12.5px]">
-                        <span className="shrink-0 font-mono text-[11px] px-1.5 py-0.5 rounded mt-0.5" style={{ background: "rgba(108,99,255,0.1)", color: "#8B85FF" }}>{key}</span>
-                        <span style={{ color: "#F5F7FA" }}>{val || <span style={{ color: "#8B95A7" }}>(empty)</span>}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                  {dirty && (
+                    <p className="text-[11px] mt-1.5" style={{ color: "#F59E0B" }}>
+                      Unsaved changes — save corrections before sending.
+                    </p>
+                  )}
+                </section>
               )}
 
-              {/* Final message */}
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-wider mb-2" style={{ color: "#8B95A7" }}>Message to be sent</div>
+              {/* ── Rendered Message Preview ── */}
+              <section>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "#8B95A7" }}>
+                    Rendered Message
+                  </span>
+                  {dirty && <span className="text-[10.5px]" style={{ color: "#F59E0B" }}>Preview (unsaved)</span>}
+                </div>
                 <div className="p-3 rounded-xl text-[12.5px] whitespace-pre-wrap font-mono leading-relaxed"
-                  style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", color: "#C8D0DC" }}>
-                  {message}
+                  style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${dirty ? "rgba(245,158,11,0.3)" : "rgba(255,255,255,0.07)"}`, color: "#C8D0DC" }}>
+                  {renderedMessage}
                 </div>
-              </div>
+                {!page && (
+                  <div className="mt-2 p-3 rounded-xl flex items-start gap-2 text-[12.5px]"
+                    style={{ background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.2)", color: "#F59E0B" }}>
+                    <AlertCircle size={14} className="shrink-0 mt-0.5" /> Facebook Page not loaded — please refresh.
+                  </div>
+                )}
+              </section>
 
-              {/* Warning if no page */}
-              {!page && (
-                <div className="p-3 rounded-xl flex items-start gap-2 text-[12.5px]"
-                  style={{ background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.2)", color: "#F59E0B" }}>
-                  <AlertCircle size={14} className="mt-0.5 shrink-0" /> Facebook Page data not loaded. Please refresh and try again.
-                </div>
-              )}
+              {/* ── Test Send ── */}
+              <section>
+                <button
+                  onClick={() => { setTestOpen(o => !o); setTestResults(null); setTestError(""); }}
+                  className="w-full flex items-center justify-between px-4 py-3 rounded-xl text-left"
+                  style={{ background: testOpen ? "rgba(108,99,255,0.08)" : "rgba(255,255,255,0.03)", border: `1px solid ${testOpen ? "rgba(108,99,255,0.2)" : "rgba(255,255,255,0.07)"}` }}>
+                  <div className="flex items-center gap-2">
+                    <Users size={13} style={{ color: "#8B85FF" }} />
+                    <span className="text-[12.5px] font-medium" style={{ color: "#F5F7FA" }}>Test Send</span>
+                    <span className="text-[11px]" style={{ color: "#8B95A7" }}>— send to 1–5 contacts before the full broadcast</span>
+                  </div>
+                  <span className="text-[11px]" style={{ color: "#8B95A7" }}>{testOpen ? "▲" : "▼"}</span>
+                </button>
 
-              {/* Error */}
-              {error && (
+                {testOpen && (
+                  <div className="mt-2 p-4 rounded-xl flex flex-col gap-3"
+                    style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)" }}>
+                    <p className="text-[11.5px]" style={{ color: "#8B95A7" }}>
+                      Sends the exact message to up to 5 contacts. No DB state changes — recipient statuses stay "pending". Use this to verify the message looks correct in Messenger before sending to all {recipientCount} recipients.
+                    </p>
+
+                    {/* Test contact search */}
+                    <div className="relative">
+                      <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#8B95A7" }} />
+                      <input type="text" placeholder="Search contacts…" value={testSearch}
+                        onChange={e => setTestSearch(e.target.value)}
+                        className="w-full pl-8 pr-3 py-2 rounded-lg text-[12.5px] outline-none" style={inp} />
+                    </div>
+
+                    {testContactsLoading ? (
+                      <div className="flex items-center gap-2 text-[12px]" style={{ color: "#8B95A7" }}>
+                        <Loader2 size={12} className="animate-spin" /> Loading contacts…
+                      </div>
+                    ) : testContacts.length === 0 ? (
+                      <p className="text-[12px]" style={{ color: "#8B95A7" }}>No contacts found.</p>
+                    ) : (
+                      <div className="flex flex-col gap-1 max-h-40 overflow-y-auto">
+                        {testContacts.slice(0, 20).map(c => {
+                          const checked = testSelected.has(c.id);
+                          const canAdd = testSelected.size < 5 || checked;
+                          return (
+                            <button key={c.id} onClick={() => canAdd && toggleTestContact(c.id)}
+                              disabled={!canAdd}
+                              className="flex items-center gap-2.5 p-2 rounded-lg text-left transition-all"
+                              style={{ background: checked ? "rgba(108,99,255,0.08)" : "transparent", border: `1px solid ${checked ? "rgba(108,99,255,0.2)" : "transparent"}`, opacity: canAdd ? 1 : 0.4 }}>
+                              <div className="w-4 h-4 rounded flex items-center justify-center shrink-0"
+                                style={{ background: checked ? "#6C63FF" : "rgba(255,255,255,0.08)", border: checked ? "none" : "1px solid rgba(255,255,255,0.15)" }}>
+                                {checked && <Check size={9} color="#fff" />}
+                              </div>
+                              <span className="text-[12px]" style={{ color: "#F5F7FA" }}>{contactDisplayName(c)}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {testSelected.size > 0 && (
+                      <p className="text-[11px]" style={{ color: "#8B85FF" }}>
+                        {testSelected.size} of 5 selected
+                      </p>
+                    )}
+
+                    {testError && (
+                      <div className="p-2.5 rounded-lg flex items-start gap-2 text-[12px]"
+                        style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#EF4444" }}>
+                        <AlertCircle size={12} className="mt-0.5 shrink-0" /> {testError}
+                      </div>
+                    )}
+
+                    {testResults && (
+                      <div className="flex flex-col gap-1.5">
+                        {testResults.map(r => (
+                          <div key={r.contactId} className="flex items-start gap-2 text-[12px]">
+                            {r.success
+                              ? <Check size={13} style={{ color: "#10B981" }} className="mt-0.5 shrink-0" />
+                              : <AlertCircle size={13} style={{ color: "#EF4444" }} className="mt-0.5 shrink-0" />}
+                            <div>
+                              <span style={{ color: "#F5F7FA" }}>{r.name}</span>
+                              {!r.success && r.error && (
+                                <span className="ml-1.5 text-[11px]" style={{ color: "#EF4444" }}>{r.error}</span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <button onClick={handleTestSend}
+                      disabled={testSelected.size === 0 || testSending || dirty}
+                      className="flex items-center justify-center gap-2 py-2 rounded-lg text-[12.5px] font-semibold text-white"
+                      style={{ background: "rgba(108,99,255,0.7)", opacity: (testSelected.size === 0 || testSending || dirty) ? 0.5 : 1 }}>
+                      {testSending
+                        ? <><Loader2 size={12} className="animate-spin" /> Sending test…</>
+                        : <><Send size={12} /> Send test to {testSelected.size || "?"} contact{testSelected.size !== 1 ? "s" : ""}</>}
+                    </button>
+                  </div>
+                )}
+              </section>
+
+              {/* ── Send errors ── */}
+              {sendError && (
                 <div className="p-3 rounded-xl flex items-start gap-2 text-[12.5px]"
                   style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#EF4444" }}>
-                  <AlertCircle size={14} className="mt-0.5 shrink-0" /> {error}
+                  <AlertCircle size={14} className="mt-0.5 shrink-0" /> {sendError}
                 </div>
               )}
             </>
@@ -263,24 +567,24 @@ function DraftDetailModal({ broadcast, onClose, onSent }: {
         </div>
 
         {/* Footer */}
-        {!result && (
+        {!sendResult && (
           <div className="flex gap-3 px-6 py-4 shrink-0 border-t" style={{ borderColor: "rgba(255,255,255,0.07)" }}>
-            {!sending && (
-              <button onClick={onClose} className="flex-1 py-2.5 rounded-xl text-[13px] font-medium"
+            {!isBusy && (
+              <button onClick={onClose}
+                className="flex-1 py-2.5 rounded-xl text-[13px] font-medium"
                 style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#8B95A7" }}>
                 Cancel
               </button>
             )}
-            <button
-              onClick={handleSend}
-              disabled={sending || !!result}
+            <button onClick={handleSendAll}
+              disabled={isBusy || dirty || fieldErrors > 0}
               className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold text-white"
-              style={{ background: "#6C63FF", opacity: sending ? 0.8 : 1 }}>
-              {sending ? (
-                <><Loader2 size={14} className="animate-spin" /> Sending to {recipientCount} recipients…</>
-              ) : (
-                <><Send size={14} /> Send Now</>
-              )}
+              style={{ background: "#6C63FF", opacity: (isBusy || dirty || fieldErrors > 0) ? 0.5 : 1 }}>
+              {sending
+                ? <><Loader2 size={14} className="animate-spin" /> Sending to {recipientCount}…</>
+                : dirty ? "Save corrections first"
+                : fieldErrors > 0 ? "Fix required fields first"
+                : <><Send size={14} /> Send to All {recipientCount} Recipients</>}
             </button>
           </div>
         )}
