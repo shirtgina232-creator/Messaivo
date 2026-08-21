@@ -30,10 +30,15 @@ export async function GET(req: Request) {
   const oauthUrl = new URL("https://www.facebook.com/v19.0/dialog/oauth");
   oauthUrl.searchParams.set("client_id", appId);
   oauthUrl.searchParams.set("redirect_uri", cbUrl);
-  if (configId) oauthUrl.searchParams.set("config_id", configId);
-  oauthUrl.searchParams.set("scope", "pages_show_list,pages_messaging,pages_manage_metadata");
   oauthUrl.searchParams.set("response_type", "code");
   oauthUrl.searchParams.set("state", state);
+  if (configId) {
+    // Facebook Login for Business: config_id controls permissions — scope is ignored and should not be sent
+    oauthUrl.searchParams.set("config_id", configId);
+  } else {
+    // Standard Facebook Login fallback
+    oauthUrl.searchParams.set("scope", "pages_show_list,pages_messaging,pages_manage_metadata");
+  }
 
   const res = NextResponse.redirect(oauthUrl.toString());
   res.cookies.set("meta_oauth_state", state, {

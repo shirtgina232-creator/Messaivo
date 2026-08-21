@@ -21,13 +21,14 @@ type ApiPage = {
 // ── Error messages ────────────────────────────────────────────────────────────
 
 const ERROR_MSGS: Record<string, string> = {
-  not_configured: "Meta credentials are not configured. Please set META_APP_ID and META_APP_SECRET in your environment.",
-  denied:         "You declined Facebook authorization. No pages were connected.",
-  no_pages:       "Your Facebook account doesn't manage any Pages. Create a Facebook Page first, then connect it here.",
-  token_error:    "Failed to exchange the Facebook authorization code. Please try again.",
-  invalid_state:  "The authorization request expired. Please try again.",
-  server_error:   "An unexpected error occurred. Please try again.",
-  invalid_callback: "Invalid callback parameters. Please try again.",
+  not_configured:   "Meta credentials are not configured. Contact your administrator.",
+  denied:           "You declined Facebook authorization. No pages were connected.",
+  no_pages:         "Your Facebook account doesn't manage any Pages. Create a Facebook Page first, then connect it here.",
+  token_error:      "Failed to exchange the Facebook authorization code. Make sure the callback URL is registered in your Meta App's Valid OAuth Redirect URIs, then try again.",
+  invalid_state:    "The authorization request expired or was replayed. Please try again.",
+  server_error:     "An unexpected server error occurred. Please try again or contact support.",
+  invalid_callback: "Invalid callback parameters from Facebook. Please try again.",
+  encryption_error: "Token encryption is misconfigured. The META_TOKEN_ENCRYPTION_KEY environment variable must be set to a valid 64-character hex string in Vercel.",
 };
 
 // ── Disconnect modal ──────────────────────────────────────────────────────────
