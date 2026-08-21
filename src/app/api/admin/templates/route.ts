@@ -26,7 +26,9 @@ export async function POST(req: Request) {
     const template = await prisma.globalTemplate.create({
       data: {
         name: data.name as string,
+        description: typeof data.description === "string" ? data.description : null,
         content: data.content as string,
+        fields: Array.isArray(data.fields) ? data.fields : undefined,
         category: typeof data.category === "string" ? data.category : undefined,
         isActive: data.isActive !== false,
         createdBy: admin.id,

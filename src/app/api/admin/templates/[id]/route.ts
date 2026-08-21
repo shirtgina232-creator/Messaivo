@@ -16,7 +16,9 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       where: { id },
       data: {
         name: typeof data.name === "string" ? data.name : undefined,
+        description: typeof data.description === "string" ? data.description : undefined,
         content: typeof data.content === "string" ? data.content : undefined,
+        fields: Array.isArray(data.fields) ? data.fields : undefined,
         category: typeof data.category === "string" ? data.category : undefined,
         isActive: typeof data.isActive === "boolean" ? data.isActive : undefined,
       },

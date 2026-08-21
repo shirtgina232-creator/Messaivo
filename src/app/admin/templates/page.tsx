@@ -2,7 +2,10 @@ import { prisma } from "@/lib/db";
 import TemplatesManager from "./_components/TemplatesManager";
 
 export default async function AdminTemplatesPage() {
-  const templates = await prisma.globalTemplate.findMany({ orderBy: { createdAt: "desc" } });
+  const raw = await prisma.globalTemplate.findMany({ orderBy: { createdAt: "desc" } });
+  // Cast Prisma's JsonValue fields to the typed shape used by the client component
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const templates = raw as any[];
   return (
     <div className="p-6 max-w-[1400px] mx-auto">
       <div className="mb-6">
