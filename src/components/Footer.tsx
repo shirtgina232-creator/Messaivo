@@ -3,18 +3,17 @@
 import Link from "next/link";
 
 const footerLinks = {
-  Product:   [
-    { label: "Features",  href: "/features" },
-    { label: "Pricing",   href: "/pricing"  },
-    { label: "Integrations", href: "/features" },
+  Product: [
+    { label: "Features",     href: "/features" },
+    { label: "Pricing",      href: "/pricing"  },
+    { label: "How it works", href: "/features" },
   ],
-  Company:   [
-    { label: "About",   href: "/contact" },
-    { label: "Contact", href: "/contact" },
+  Company: [
+    { label: "Contact",      href: "/contact"  },
   ],
   Resources: [
-    { label: "Help Center",    href: "/contact" },
-    { label: "Documentation",  href: "/contact" },
+    { label: "FAQ",           href: "/#faq"    },
+    { label: "Contact us",   href: "/contact"  },
   ],
   Legal: [
     { label: "Privacy",       href: "/privacy"       },
@@ -39,31 +38,15 @@ export default function Footer() {
             <p className="text-[13px] leading-relaxed max-w-[200px]" style={{ color: "var(--muted)" }}>
               Customer conversations, organized.
             </p>
-            <div className="flex items-center gap-3 mt-5">
+            <div className="mt-5">
               <a
-                href="#"
-                aria-label="LinkedIn"
-                className="w-8 h-8 rounded-lg flex items-center justify-center transition-colors"
-                style={{ background: "var(--input-bg)", border: "1px solid var(--border)", color: "var(--muted)" }}
+                href="mailto:hello@messaivo.com"
+                className="text-[12.5px] transition-colors"
+                style={{ color: "var(--muted)" }}
                 onMouseEnter={e => (e.currentTarget.style.color = "var(--text)")}
                 onMouseLeave={e => (e.currentTarget.style.color = "var(--muted)")}
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6zM2 9h4v12H2z" />
-                  <circle cx="4" cy="4" r="2" />
-                </svg>
-              </a>
-              <a
-                href="#"
-                aria-label="X (Twitter)"
-                className="w-8 h-8 rounded-lg flex items-center justify-center transition-colors"
-                style={{ background: "var(--input-bg)", border: "1px solid var(--border)", color: "var(--muted)" }}
-                onMouseEnter={e => (e.currentTarget.style.color = "var(--text)")}
-                onMouseLeave={e => (e.currentTarget.style.color = "var(--muted)")}
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
-                </svg>
+                hello@messaivo.com
               </a>
             </div>
           </div>

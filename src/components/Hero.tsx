@@ -45,7 +45,7 @@ export default function Hero() {
             }}
           >
             <span className="w-1.5 h-1.5 rounded-full animate-pulse-dot" style={{ background: "#6C63FF" }} />
-            Modern customer messaging, built for businesses
+            Facebook Messenger CRM for business teams
             <ArrowRight size={13} />
           </div>
         </div>
@@ -56,10 +56,10 @@ export default function Hero() {
             className="text-[44px] md:text-[64px] lg:text-[76px] font-semibold tracking-[-0.03em] leading-[1.05]"
             style={{ color: "var(--text)" }}
           >
-            Every customer{" "}
-            <span className="gradient-text-accent">conversation.</span>
+            Your Facebook Messenger{" "}
+            <span className="gradient-text-accent">customers,</span>
             <br />
-            One powerful workspace.
+            managed in one place.
           </h1>
         </div>
 
@@ -69,8 +69,8 @@ export default function Hero() {
             className="text-[16px] md:text-[18px] leading-relaxed font-normal"
             style={{ color: "var(--muted)" }}
           >
-            Connect your Facebook Pages, manage conversations, organize your audience,
-            and streamline customer messaging from one intelligent workspace.
+            Connect your Facebook Pages, reply to Messenger conversations, organize your contacts,
+            and reach eligible customers — all from one workspace built for business teams.
           </p>
         </div>
 
@@ -96,7 +96,7 @@ export default function Hero() {
             <ArrowRight size={16} className="group-hover:translate-x-0.5 transition-transform" />
           </Link>
           <Link
-            href="/app"
+            href="#demo"
             className="inline-flex items-center gap-2 text-[14.5px] font-medium px-6 py-3.5 rounded-xl transition-all duration-200"
             style={{
               color: "var(--muted)",

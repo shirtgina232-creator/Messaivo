@@ -7,10 +7,9 @@ import ThemeToggle from "./ThemeToggle";
 import { MessaivoLogo } from "./MessaivoLogo";
 
 const navLinks = [
-  { label: "Product",   href: "/features" },
   { label: "Features",  href: "/features" },
   { label: "Pricing",   href: "/pricing"  },
-  { label: "Resources", href: "#faq"      },
+  { label: "Contact",   href: "/contact"  },
 ];
 
 export default function Navbar() {

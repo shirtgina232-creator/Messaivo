@@ -228,7 +228,7 @@ function BroadcastUI() {
           <div>
             <div className="text-[10px] font-semibold uppercase tracking-wider text-[#8B95A7]/60 mb-1.5">Message</div>
             <div className="p-2.5 rounded-lg text-[11px] text-[#8B95A7]" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
-              Hey {"{{first_name}}"}, we have something new you might love...
+              Hi {"{{first_name}}"}, just a reminder that your order is ready for pickup. Thanks for shopping with us!
             </div>
           </div>
           <div className="flex items-center gap-2 p-2.5 rounded-lg" style={{ background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.15)" }}>

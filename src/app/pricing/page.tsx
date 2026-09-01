@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import Navbar from "@/components/Navbar";
 import Pricing from "@/components/Pricing";
 import FAQ from "@/components/FAQ";
@@ -9,17 +10,17 @@ import { Check } from "lucide-react";
 export const metadata: Metadata = {
   title: "Pricing — Messaivo",
   description:
-    "Simple, transparent pricing for every stage of your business. Start free, scale when you're ready.",
+    "Messaivo pricing starts at $19/month for solo operators and scales to $99/month for established businesses. All plans include unified Messenger inbox, audience management, and message templates. Save 20% with annual billing.",
+  alternates: { canonical: "https://messaivo.com/pricing" },
 };
 
 const comparison = [
-  { feature: "Connected Pages", starter: "1", pro: "Up to 5", business: "Up to 20" },
+  { feature: "Connected Facebook Pages", starter: "1", pro: "Up to 5", business: "Up to 20" },
   { feature: "Messenger inbox", starter: true, pro: true, business: true },
   { feature: "Audience management", starter: true, pro: true, business: true },
   { feature: "Message templates", starter: true, pro: true, business: true },
-  { feature: "Basic analytics", starter: true, pro: false, business: false },
-  { feature: "Advanced analytics", starter: false, pro: true, business: true },
-  { feature: "Team members", starter: false, pro: true, business: true },
+  { feature: "Analytics", starter: "Basic", pro: "Advanced", business: "Advanced" },
+  { feature: "Team members & roles", starter: false, pro: true, business: true },
   { feature: "Permitted broadcasts", starter: false, pro: true, business: true },
   { feature: "Workspace management", starter: false, pro: false, business: true },
   { feature: "Priority support", starter: false, pro: false, business: true },
@@ -42,16 +43,26 @@ export default function PricingPage() {
     <>
       <Navbar />
       <main className="pt-32">
+        {/* Breadcrumb */}
+        <nav className="max-w-7xl mx-auto px-6 mb-8" aria-label="Breadcrumb">
+          <ol className="flex items-center gap-2 text-[12.5px]" style={{ color: "var(--muted)" }}>
+            <li><Link href="/" className="hover:underline underline-offset-2">Home</Link></li>
+            <li aria-hidden="true" style={{ opacity: 0.4 }}>›</li>
+            <li aria-current="page" style={{ opacity: 0.6 }}>Pricing</li>
+          </ol>
+        </nav>
+
         {/* Hero */}
         <div className="max-w-4xl mx-auto px-6 text-center mb-6">
           <p className="text-[13px] font-semibold uppercase tracking-widest text-[#8B95A7]/50 mb-4">
             Pricing
           </p>
           <h1 className="text-[44px] md:text-[60px] font-semibold tracking-[-0.03em] leading-tight text-[#F5F7FA] mb-4">
-            Simple, honest pricing.
+            Simple pricing. No surprises.
           </h1>
           <p className="text-[17px] text-[#8B95A7] leading-relaxed max-w-xl mx-auto">
-            Pick the plan that fits your team. Upgrade or cancel anytime.
+            Three plans for every stage of your business — from solo operators to established teams.
+            Upgrade, downgrade, or cancel anytime.
           </p>
         </div>
 

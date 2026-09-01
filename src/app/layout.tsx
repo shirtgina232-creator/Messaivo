@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { cache } from "react";
+import Script from "next/script";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import "./globals.css";
@@ -32,27 +33,52 @@ const getSiteData = cache(async () => {
 
 export async function generateMetadata(): Promise<Metadata> {
   const { branding } = await getSiteData();
-  const title = branding?.browserTitle ?? "Messaivo — Customer Conversations, Organized";
+  const siteName = "Messaivo";
+  const defaultTitle = "Messaivo — Facebook Messenger CRM for Business";
+  const title = branding?.browserTitle ?? defaultTitle;
+  const description =
+    "Messaivo is a Facebook Messenger CRM that helps businesses manage customer conversations, organize contacts, send permitted broadcasts, and collaborate as a team — all from one workspace.";
   return {
-    title,
-    description:
-      "Connect your Facebook Pages, manage Messenger conversations, organize your audience, and streamline customer messaging from one intelligent workspace.",
-    keywords: ["customer messaging", "CRM", "Facebook Messenger", "inbox management"],
+    title: {
+      default: title,
+      template: `%s — ${siteName}`,
+    },
+    description,
+    keywords: [
+      "Facebook Messenger CRM",
+      "customer messaging platform",
+      "Messenger inbox management",
+      "Facebook Page inbox",
+      "customer conversation management",
+      "Messenger broadcast tool",
+      "Facebook business messaging",
+      "customer support CRM",
+      "audience management",
+      "message templates",
+    ],
+    authors: [{ name: siteName, url: "https://messaivo.com" }],
+    creator: siteName,
+    publisher: siteName,
+    metadataBase: new URL("https://messaivo.com"),
+    alternates: { canonical: "/" },
     icons: {
       icon: branding?.faviconUrl
         ? [{ url: branding.faviconUrl }]
         : [{ url: "/favicon.svg", type: "image/svg+xml" }],
     },
     openGraph: {
+      siteName,
       title,
-      description: "Bring your customer messaging workflow into one powerful workspace.",
+      description,
       type: "website",
       url: "https://messaivo.com",
+      locale: "en_US",
     },
     twitter: {
       card: "summary_large_image",
+      site: "@messaivo",
       title,
-      description: "Manage customer conversations from one intelligent workspace.",
+      description,
     },
     other: {
       "facebook-domain-verification": "j52wczag8fjl2t0e1vz3hmhgaot0kr",
@@ -96,6 +122,71 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             <style dangerouslySetInnerHTML={{ __html: themeStyle }} />
           )}
           <ThemeProvider>{children}</ThemeProvider>
+          <Script
+            id="schema-org"
+            type="application/ld+json"
+            dangerouslySetInnerHTML={{
+              __html: JSON.stringify([
+                {
+                  "@context": "https://schema.org",
+                  "@type": "Organization",
+                  name: "Messaivo",
+                  url: "https://messaivo.com",
+                  logo: "https://messaivo.com/favicon.svg",
+                  contactPoint: {
+                    "@type": "ContactPoint",
+                    email: "hello@messaivo.com",
+                    contactType: "customer support",
+                  },
+                  sameAs: [],
+                },
+                {
+                  "@context": "https://schema.org",
+                  "@type": "WebSite",
+                  name: "Messaivo",
+                  url: "https://messaivo.com",
+                  potentialAction: {
+                    "@type": "SearchAction",
+                    target: "https://messaivo.com/?q={search_term_string}",
+                    "query-input": "required name=search_term_string",
+                  },
+                },
+                {
+                  "@context": "https://schema.org",
+                  "@type": "SoftwareApplication",
+                  name: "Messaivo",
+                  applicationCategory: "BusinessApplication",
+                  operatingSystem: "Web",
+                  url: "https://messaivo.com",
+                  description:
+                    "Messaivo is a Facebook Messenger CRM for businesses. It provides a unified inbox for Messenger conversations, audience management, message templates, permitted broadcasts, and team collaboration tools.",
+                  offers: [
+                    {
+                      "@type": "Offer",
+                      name: "Starter",
+                      price: "19",
+                      priceCurrency: "USD",
+                      billingIncrement: "P1M",
+                    },
+                    {
+                      "@type": "Offer",
+                      name: "Professional",
+                      price: "49",
+                      priceCurrency: "USD",
+                      billingIncrement: "P1M",
+                    },
+                    {
+                      "@type": "Offer",
+                      name: "Business",
+                      price: "99",
+                      priceCurrency: "USD",
+                      billingIncrement: "P1M",
+                    },
+                  ],
+                },
+              ]),
+            }}
+          />
         </body>
       </html>
     </ClerkProvider>

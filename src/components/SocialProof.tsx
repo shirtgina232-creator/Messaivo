@@ -17,10 +17,10 @@ export default function SocialProof() {
       <div className="max-w-7xl mx-auto px-6">
         <div className="text-center mb-12">
           <p className="text-[13px] font-semibold uppercase tracking-widest mb-4" style={{ color: "var(--muted)", opacity: 0.6 }}>
-            Built to handle it all
+            What&apos;s included
           </p>
           <h2 className="text-[28px] md:text-[36px] font-semibold tracking-[-0.02em] max-w-xl mx-auto leading-tight" style={{ color: "var(--text)" }}>
-            Everything your team needs to manage customer conversations.
+            One workspace. Every tool your team needs.
           </h2>
         </div>
 
