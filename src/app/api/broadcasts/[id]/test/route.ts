@@ -17,7 +17,7 @@ export async function POST(
 
     const broadcast = await prisma.broadcast.findFirst({
       where: { id, workspaceId: ws.id },
-      select: { id: true, status: true, pageId: true, message: true },
+      select: { id: true, status: true, pageId: true, message: true, messageTemplateId: true, fieldValues: true },
     });
     if (!broadcast) return notFound("Broadcast not found");
 
@@ -42,31 +42,55 @@ export async function POST(
     // Verify contacts belong to this workspace
     const contacts = await prisma.contact.findMany({
       where: { id: { in: ids }, workspaceId: ws.id },
-      select: { id: true, name: true, firstName: true, metaUserId: true, isSubscribed: true },
+      select: { id: true, name: true, firstName: true, lastName: true, metaUserId: true, isSubscribed: true, lastMessageAt: true },
     });
     if (contacts.length === 0) return badRequest("No valid contacts found");
 
     const page = await prisma.facebookPage.findFirst({
       where: { id: broadcast.pageId, workspaceId: ws.id },
-      select: { pageId: true, accessToken: true, isActive: true },
+      select: { pageId: true, pageName: true, accessToken: true, isActive: true },
     });
     if (!page) return badRequest("Associated Facebook Page not found");
     if (!page.isActive) return badRequest("The Facebook Page is not active");
 
     const plainToken = decryptToken(page.accessToken);
 
+    const isUserTemplate = !!broadcast.messageTemplateId;
+    const rawTemplate = isUserTemplate ? broadcast.message : null;
+    const customFieldValues = (broadcast.fieldValues ?? {}) as Record<string, string>;
+
     // Send to each test contact — no DB state changes, no credit deduction
     const results: Array<{ contactId: string; name: string; success: boolean; error: string | null }> = [];
+    const windowCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
     for (const contact of contacts) {
+      const displayName = contact.name ?? contact.firstName ?? contact.id;
       if (!contact.isSubscribed) {
-        results.push({ contactId: contact.id, name: contact.name ?? contact.firstName ?? contact.id, success: false, error: "Contact is unsubscribed" });
+        results.push({ contactId: contact.id, name: displayName, success: false, error: "Contact is unsubscribed" });
         continue;
       }
-      const result = await sendMessengerMessage(plainToken, page.pageId, contact.metaUserId, broadcast.message);
+      if (!contact.lastMessageAt || contact.lastMessageAt < windowCutoff) {
+        results.push({ contactId: contact.id, name: displayName, success: false, error: "Outside 24-hour messaging window — this contact must send a message to the Page before you can reach them." });
+        continue;
+      }
+
+      // Per-recipient rendering for user-template broadcasts
+      let messageToSend = broadcast.message;
+      if (isUserTemplate && rawTemplate) {
+        const contactVars: Record<string, string> = {
+          first_name: contact.firstName ?? contact.name?.split(" ")[0] ?? "",
+          last_name: contact.lastName ?? (contact.name?.split(" ").slice(1).join(" ") ?? ""),
+          name: contact.name ?? [contact.firstName, contact.lastName].filter(Boolean).join(" ") ?? "",
+          page_name: page.pageName,
+        };
+        const allVars = { ...customFieldValues, ...contactVars };
+        messageToSend = rawTemplate.replace(/\{\{(\w+)\}\}/g, (_, key) => allVars[key] ?? "");
+      }
+
+      const result = await sendMessengerMessage(plainToken, page.pageId, contact.metaUserId, messageToSend);
       results.push({
         contactId: contact.id,
-        name: contact.name ?? contact.firstName ?? contact.id,
+        name: displayName,
         success: !result.error,
         error: result.error,
       });

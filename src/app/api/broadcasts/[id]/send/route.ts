@@ -22,7 +22,7 @@ export async function POST(
           where: { status: "pending" },
           include: {
             contact: {
-              select: { id: true, metaUserId: true, isSubscribed: true },
+              select: { id: true, metaUserId: true, isSubscribed: true, lastMessageAt: true, firstName: true, lastName: true, name: true },
             },
           },
         },
@@ -46,11 +46,16 @@ export async function POST(
     // Load the page's encrypted access token
     const page = await prisma.facebookPage.findFirst({
       where: { id: broadcast.pageId, workspaceId: ws.id },
-      select: { id: true, pageId: true, accessToken: true, isActive: true },
+      select: { id: true, pageId: true, pageName: true, accessToken: true, isActive: true },
     });
 
     if (!page) return badRequest("Associated Facebook Page not found");
     if (!page.isActive) return badRequest("The Facebook Page is not active");
+
+    // Determine if this is a user-template broadcast (raw template, per-recipient rendering)
+    const isUserTemplate = !!broadcast.messageTemplateId;
+    const rawTemplate = isUserTemplate ? broadcast.message : null;
+    const customFieldValues = (broadcast.fieldValues ?? {}) as Record<string, string>;
 
     // Pre-flight credit check
     const creditOk = await hasMessageCredit(ws.id);
@@ -70,6 +75,8 @@ export async function POST(
     const sentAt = new Date();
     let sentCount = 0;
     let failedCount = 0;
+    let ineligibleCount = 0;
+    const windowCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const sentRecipientIds: string[] = [];
     const failedUpdates: Array<{ rid: string; reason: string }> = [];
 
@@ -84,11 +91,36 @@ export async function POST(
         continue;
       }
 
+      // Enforce Meta's 24-hour messaging window — skip rather than attempt an invalid send
+      if (!recipient.contact.lastMessageAt || recipient.contact.lastMessageAt < windowCutoff) {
+        ineligibleCount++;
+        failedCount++;
+        failedUpdates.push({
+          rid: recipient.id,
+          reason: "Outside 24-hour messaging window — recipient must send a message to the Page first.",
+        });
+        continue;
+      }
+
+      // For user-template broadcasts: render the message per-recipient using contact fields
+      let messageToSend = broadcast.message;
+      if (isUserTemplate && rawTemplate) {
+        const contact = recipient.contact;
+        const contactVars: Record<string, string> = {
+          first_name: contact.firstName ?? contact.name?.split(" ")[0] ?? "",
+          last_name: contact.lastName ?? (contact.name?.split(" ").slice(1).join(" ") ?? ""),
+          name: contact.name ?? [contact.firstName, contact.lastName].filter(Boolean).join(" ") ?? "",
+          page_name: page.pageName,
+        };
+        const allVars = { ...customFieldValues, ...contactVars }; // contact vars override any custom same-key
+        messageToSend = rawTemplate.replace(/\{\{(\w+)\}\}/g, (_, key) => allVars[key] ?? "");
+      }
+
       const result = await sendMessengerMessage(
         plainToken,
         page.pageId,
         recipient.contact.metaUserId,
-        broadcast.message,
+        messageToSend,
       );
 
       if (result.error) {
@@ -164,6 +196,7 @@ export async function POST(
       status: finalStatus,
       sent: sentCount,
       failed: failedCount,
+      ineligible: ineligibleCount,
       total: broadcast.recipients.length,
       broadcast: updated,
     });

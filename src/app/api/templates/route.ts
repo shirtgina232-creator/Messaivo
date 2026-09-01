@@ -51,10 +51,19 @@ export async function POST(req: Request) {
       return badRequest("Invalid JSON body");
     }
 
-    const { name, content, category, tags } = body as Record<string, unknown>;
+    const { name, content, category, tags, fields, pageId } = body as Record<string, unknown>;
     if (!name || typeof name !== "string" || !name.trim()) return badRequest("name is required");
     if (!content || typeof content !== "string" || !content.trim()) {
       return badRequest("content is required");
+    }
+
+    // Validate pageId if provided
+    if (pageId) {
+      const page = await prisma.facebookPage.findFirst({
+        where: { id: pageId as string, workspaceId: ws.id },
+        select: { id: true },
+      });
+      if (!page) return badRequest("Invalid pageId");
     }
 
     const template = await prisma.messageTemplate.create({
@@ -64,6 +73,8 @@ export async function POST(req: Request) {
         content: content.trim(),
         category: typeof category === "string" ? category : null,
         tags: Array.isArray(tags) ? (tags as unknown[]).filter((t): t is string => typeof t === "string") : [],
+        fields: Array.isArray(fields) ? fields : undefined,
+        pageId: typeof pageId === "string" ? pageId : null,
       },
     });
 

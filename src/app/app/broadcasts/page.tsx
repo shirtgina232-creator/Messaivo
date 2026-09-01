@@ -27,6 +27,15 @@ interface GlobalTemplate {
   category: string | null;
 }
 
+interface UserTemplate {
+  id: string;
+  name: string;
+  content: string;
+  fields: TemplateField[] | null;
+  category: string | null;
+  usageCount: number;
+}
+
 interface ContactItem {
   id: string;
   name: string | null;
@@ -34,6 +43,7 @@ interface ContactItem {
   lastName: string | null;
   metaUserId: string;
   pageId: string;
+  lastMessageAt: string | null;
 }
 
 type BroadcastItem = {
@@ -42,6 +52,7 @@ type BroadcastItem = {
   status: string;
   pageId: string | null;
   templateId: string | null;
+  messageTemplateId: string | null;
   templateName: string | null;
   message: string | null;
   fieldValues: Record<string, string> | null;
@@ -53,6 +64,11 @@ type BroadcastItem = {
   _count?: { recipients: number };
 };
 
+// Template union used inside the wizard
+type SelectedTemplate =
+  | { source: "global"; data: GlobalTemplate }
+  | { source: "user"; data: UserTemplate };
+
 const STATUS_COLORS: Record<string, { bg: string; color: string }> = {
   draft:     { bg: "rgba(139,149,167,0.1)", color: "#8B95A7" },
   scheduled: { bg: "rgba(245,158,11,0.1)",  color: "#F59E0B" },
@@ -61,10 +77,34 @@ const STATUS_COLORS: Record<string, { bg: string; color: string }> = {
   failed:    { bg: "rgba(239,68,68,0.1)",   color: "#EF4444" },
 };
 
+/** Keys automatically resolved from contact/page data — not filled by user. */
+const CONTACT_VARS = new Set(["first_name", "last_name", "name", "page_name"]);
+
+const CONTACT_VAR_SAMPLES: Record<string, string> = {
+  first_name: "Alex",
+  last_name: "Johnson",
+  name: "Alex Johnson",
+  page_name: "Your Page",
+};
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-function renderTemplate(content: string, values: Record<string, string>): string {
-  return content.replace(/\{\{(\w+)\}\}/g, (_, key) => values[key] ?? `{{${key}}}`);
+function renderPreview(content: string, values: Record<string, string>, pageName?: string): string {
+  const samples: Record<string, string> = {
+    ...CONTACT_VAR_SAMPLES,
+    ...(pageName ? { page_name: pageName } : {}),
+    ...values,
+  };
+  // Contact vars always win over custom values in preview
+  for (const k of CONTACT_VARS) {
+    if (CONTACT_VAR_SAMPLES[k]) samples[k] = pageName && k === "page_name" ? pageName : CONTACT_VAR_SAMPLES[k];
+  }
+  return content.replace(/\{\{(\w+)\}\}/g, (_, key) => samples[key] ?? `{{${key}}}`);
+}
+
+function windowStatus(c: ContactItem): "open" | "closed" | "unknown" {
+  if (!c.lastMessageAt) return "unknown";
+  return new Date(c.lastMessageAt).getTime() > Date.now() - 24 * 60 * 60 * 1000 ? "open" : "closed";
 }
 
 function contactDisplayName(c: ContactItem): string {
@@ -85,11 +125,7 @@ function FieldInput({ field, value, onChange }: {
   const style = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" };
 
   if (field.type === "TEXTAREA") {
-    return (
-      <textarea rows={3} className={`${base} resize-none`} style={style}
-        placeholder={field.placeholder ?? ""} maxLength={field.maxLength}
-        value={value} onChange={e => onChange(e.target.value)} />
-    );
+    return <textarea rows={3} className={`${base} resize-none`} style={style} placeholder={field.placeholder ?? ""} maxLength={field.maxLength} value={value} onChange={e => onChange(e.target.value)} />;
   }
   if (field.type === "DROPDOWN" && field.options?.length) {
     return (
@@ -102,27 +138,26 @@ function FieldInput({ field, value, onChange }: {
   const inputType = field.type === "DATE" ? "date"
     : (field.type === "NUMBER" || field.type === "CURRENCY") ? "text"
     : field.type === "URL" ? "url" : "text";
-  return (
-    <input type={inputType} className={base} style={style}
-      placeholder={field.placeholder ?? (field.type === "CURRENCY" ? "0.00" : field.type === "URL" ? "https://" : "")}
-      maxLength={field.maxLength} value={value} onChange={e => onChange(e.target.value)} />
-  );
+  return <input type={inputType} className={base} style={style} placeholder={field.placeholder ?? (field.type === "CURRENCY" ? "0.00" : field.type === "URL" ? "https://" : "")} maxLength={field.maxLength} value={value} onChange={e => onChange(e.target.value)} />;
 }
 
-// ── Field type validation helpers ─────────────────────────────────────────────
-
 function validateFieldValue(type: FieldType, value: string): string | null {
-  if (!value.trim()) return null; // empty handled separately by required check
+  if (!value.trim()) return null;
   if (type === "URL") {
-    try { new URL(value); return null; } catch { return `Expected a URL starting with https://`; }
+    try {
+      const u = new URL(value);
+      if (u.protocol !== "https:" && u.protocol !== "http:") return "URL must start with https://";
+      return null;
+    } catch { return "Expected a URL starting with https://"; }
   }
   if (type === "DATE") {
-    const d = new Date(value);
-    if (isNaN(d.getTime())) return "Expected a date (e.g. 2026-12-31)";
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value.trim())) return "Required format: YYYY-MM-DD (e.g. 2026-12-31)";
+    const d = new Date(value.trim() + "T00:00:00");
+    if (isNaN(d.getTime())) return "Invalid date — use YYYY-MM-DD";
     return null;
   }
   if (type === "NUMBER" || type === "CURRENCY") {
-    if (isNaN(Number(value))) return "Expected a number";
+    if (isNaN(Number(value))) return "Expected a number (e.g. 50 or 9.99)";
     return null;
   }
   return null;
@@ -137,6 +172,7 @@ const FIELD_TYPE_LABELS: Record<FieldType, string> = {
 
 interface EnrichedBroadcast extends BroadcastItem {
   template?: { fields: TemplateField[] | null; content: string } | null;
+  messageTemplate?: { fields: TemplateField[] | null; content: string } | null;
 }
 
 interface TestResult {
@@ -153,17 +189,13 @@ function DraftDetailModal({ broadcast: initialBroadcast, onClose, onSent }: {
 }) {
   const { pages } = useWorkspace();
 
-  // Full broadcast with template fields, fetched on mount
   const [broadcast, setBroadcast] = useState<EnrichedBroadcast>(initialBroadcast);
   const [loadingDetails, setLoadingDetails] = useState(true);
-
-  // Editable field values (initialised from saved broadcast.fieldValues)
   const [editValues, setEditValues] = useState<Record<string, string>>(initialBroadcast.fieldValues ?? {});
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
 
-  // Test send state
   const [testOpen, setTestOpen] = useState(false);
   const [testContacts, setTestContacts] = useState<ContactItem[]>([]);
   const [testContactsLoading, setTestContactsLoading] = useState(false);
@@ -173,31 +205,40 @@ function DraftDetailModal({ broadcast: initialBroadcast, onClose, onSent }: {
   const [testResults, setTestResults] = useState<TestResult[] | null>(null);
   const [testError, setTestError] = useState("");
 
-  // Full send state
   const [sending, setSending] = useState(false);
-  const [sendResult, setSendResult] = useState<{ sent: number; failed: number; status: string } | null>(null);
+  const [sendResult, setSendResult] = useState<{ sent: number; failed: number; ineligible: number; status: string } | null>(null);
   const [sendError, setSendError] = useState("");
 
   const page = pages.find(p => p.id === broadcast.pageId);
   const recipientCount = broadcast.totalRecipients ?? broadcast._count?.recipients ?? 0;
-  const templateFields = (broadcast.template?.fields ?? []) as TemplateField[];
-  const templateContent = broadcast.template?.content ?? "";
 
-  // Live-rendered message reflects edits
-  const renderedMessage = templateContent
-    ? renderTemplate(templateContent, editValues)
+  // Determine if this is a user-template or global-template broadcast
+  const isUserTemplate = !!broadcast.messageTemplateId;
+  const activeTemplateData = isUserTemplate ? broadcast.messageTemplate : broadcast.template;
+  const rawContent = activeTemplateData?.content ?? "";
+
+  // For user templates: only show custom (non-contact) fields
+  const allTemplateFields = (activeTemplateData?.fields ?? []) as TemplateField[];
+  const templateFields = isUserTemplate
+    ? allTemplateFields.filter(f => !CONTACT_VARS.has(f.key))
+    : allTemplateFields;
+  const contactVarsInTemplate = isUserTemplate
+    ? allTemplateFields.filter(f => CONTACT_VARS.has(f.key))
+    : [];
+
+  // Live preview: for user templates substitute contact vars with samples + custom values
+  const renderedMessage = rawContent
+    ? renderPreview(rawContent, editValues, page?.name)
     : (broadcast.message ?? "");
 
   const isBusy = saving || sending || testSending;
 
-  // Fetch full broadcast details (with template fields) on mount
   useEffect(() => {
     fetch(`/api/broadcasts/${initialBroadcast.id}`)
       .then(r => r.ok ? r.json() : null)
       .then((d: { broadcast?: EnrichedBroadcast } | null) => {
         if (d?.broadcast) {
           setBroadcast(d.broadcast);
-          // Only reset editValues if not yet dirty
           setEditValues(prev => Object.keys(prev).length ? prev : (d.broadcast!.fieldValues ?? {}));
         }
       })
@@ -206,7 +247,6 @@ function DraftDetailModal({ broadcast: initialBroadcast, onClose, onSent }: {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Load test contacts when test panel opens
   useEffect(() => {
     if (!testOpen || !broadcast.pageId) return;
     setTestContactsLoading(true);
@@ -236,7 +276,7 @@ function DraftDetailModal({ broadcast: initialBroadcast, onClose, onSent }: {
       });
       const d = await res.json() as { broadcast?: BroadcastItem; error?: string };
       if (res.ok && d.broadcast) {
-        setBroadcast(prev => ({ ...prev, ...d.broadcast, template: prev.template }));
+        setBroadcast(prev => ({ ...prev, ...d.broadcast, template: prev.template, messageTemplate: prev.messageTemplate }));
         setDirty(false);
       } else {
         setSaveError(d.error ?? "Failed to save changes.");
@@ -249,11 +289,7 @@ function DraftDetailModal({ broadcast: initialBroadcast, onClose, onSent }: {
   };
 
   const toggleTestContact = (id: string) =>
-    setTestSelected(prev => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
+    setTestSelected(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
 
   const handleTestSend = async () => {
     if (testSelected.size === 0) return;
@@ -283,11 +319,9 @@ function DraftDetailModal({ broadcast: initialBroadcast, onClose, onSent }: {
     setSendError("");
     try {
       const res = await fetch(`/api/broadcasts/${broadcast.id}/send`, { method: "POST" });
-      const d = await res.json() as {
-        status?: string; sent?: number; failed?: number; broadcast?: BroadcastItem; error?: string;
-      };
+      const d = await res.json() as { status?: string; sent?: number; failed?: number; ineligible?: number; broadcast?: BroadcastItem; error?: string };
       if (res.ok && d.broadcast) {
-        setSendResult({ sent: d.sent ?? 0, failed: d.failed ?? 0, status: d.status ?? "completed" });
+        setSendResult({ sent: d.sent ?? 0, failed: d.failed ?? 0, ineligible: d.ineligible ?? 0, status: d.status ?? "completed" });
         onSent(d.broadcast);
       } else {
         setSendError(d.error ?? "Failed to send broadcast.");
@@ -300,12 +334,7 @@ function DraftDetailModal({ broadcast: initialBroadcast, onClose, onSent }: {
   };
 
   const inp = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" };
-
-  // Count validation issues across all fields
-  const fieldWarnings = templateFields.filter(f => {
-    const warn = validateFieldValue(f.type, editValues[f.key] ?? "");
-    return !!warn;
-  }).length;
+  const fieldWarnings = templateFields.filter(f => !!validateFieldValue(f.type, editValues[f.key] ?? "")).length;
   const fieldErrors = templateFields.filter(f => f.required && !(editValues[f.key] ?? "").trim()).length;
 
   return (
@@ -326,6 +355,11 @@ function DraftDetailModal({ broadcast: initialBroadcast, onClose, onSent }: {
                   {broadcast.templateName}
                 </span>
               )}
+              {isUserTemplate && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded font-medium" style={{ background: "rgba(16,185,129,0.08)", color: "#10B981" }}>
+                  Personalized
+                </span>
+              )}
             </div>
           </div>
           {!isBusy && <button onClick={onClose}><X size={16} style={{ color: "#8B95A7" }} /></button>}
@@ -333,9 +367,7 @@ function DraftDetailModal({ broadcast: initialBroadcast, onClose, onSent }: {
 
         {/* Body */}
         <div className="px-6 py-5 flex flex-col gap-5 overflow-y-auto flex-1 min-h-0">
-
           {sendResult ? (
-            // ── Result ──
             <div className="flex flex-col items-center justify-center py-8 gap-4">
               <div className="w-14 h-14 rounded-full flex items-center justify-center"
                 style={{ background: sendResult.failed === 0 ? "rgba(16,185,129,0.15)" : "rgba(245,158,11,0.12)" }}>
@@ -346,27 +378,47 @@ function DraftDetailModal({ broadcast: initialBroadcast, onClose, onSent }: {
               </div>
               <div className="flex gap-4 text-[13px]">
                 <span style={{ color: "#10B981" }}>{sendResult.sent} delivered</span>
-                {sendResult.failed > 0 && <span style={{ color: "#EF4444" }}>{sendResult.failed} failed</span>}
+                {sendResult.ineligible > 0 && <span style={{ color: "#F59E0B" }}>{sendResult.ineligible} window closed</span>}
+                {(sendResult.failed - sendResult.ineligible) > 0 && <span style={{ color: "#EF4444" }}>{sendResult.failed - sendResult.ineligible} failed</span>}
               </div>
-              {sendResult.failed > 0 && (
+              {sendResult.ineligible > 0 && (
                 <p className="text-[12px] text-center max-w-xs" style={{ color: "#8B95A7" }}>
-                  Failed recipients may have closed their 24-hour messaging window or unsubscribed.
+                  {sendResult.ineligible} recipient{sendResult.ineligible !== 1 ? "s were" : " was"} skipped — their 24-hour Messenger window had closed. No credits were charged for these.
                 </p>
               )}
-              <button onClick={onClose} className="mt-2 px-5 py-2 rounded-xl text-[13px] font-semibold text-white"
-                style={{ background: "#6C63FF" }}>Done</button>
+              <button onClick={onClose} className="mt-2 px-5 py-2 rounded-xl text-[13px] font-semibold text-white" style={{ background: "#6C63FF" }}>Done</button>
             </div>
-
           ) : (
             <>
-              {/* ── Field Values (editable) ── */}
+              {/* Contact variables notice for user-template broadcasts */}
+              {isUserTemplate && contactVarsInTemplate.length > 0 && (
+                <section className="p-3 rounded-xl" style={{ background: "rgba(16,185,129,0.05)", border: "1px solid rgba(16,185,129,0.15)" }}>
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <Check size={12} style={{ color: "#10B981" }} />
+                    <span className="text-[11px] font-semibold" style={{ color: "#10B981" }}>Auto-personalized per recipient</span>
+                    {loadingDetails && <Loader2 size={10} className="animate-spin" style={{ color: "#10B981" }} />}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {contactVarsInTemplate.map(f => (
+                      <span key={f.key} className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: "rgba(16,185,129,0.1)", color: "#10B981" }}>
+                        {`{{${f.key}}}`}
+                      </span>
+                    ))}
+                  </div>
+                  <p className="text-[11px] mt-1.5" style={{ color: "#8B95A7" }}>
+                    These are automatically replaced with each recipient&apos;s contact data when the message is sent.
+                  </p>
+                </section>
+              )}
+
+              {/* Editable custom field values */}
               {templateFields.length > 0 && (
                 <section>
                   <div className="flex items-center justify-between mb-3">
                     <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "#8B95A7" }}>
-                      Message Fields
+                      {isUserTemplate ? "Custom Fields" : "Message Fields"}
                     </span>
-                    {loadingDetails && <Loader2 size={12} className="animate-spin" style={{ color: "#8B95A7" }} />}
+                    {!isUserTemplate && loadingDetails && <Loader2 size={12} className="animate-spin" style={{ color: "#8B95A7" }} />}
                     {(fieldWarnings > 0 || fieldErrors > 0) && (
                       <span className="text-[10.5px] flex items-center gap-1 px-2 py-0.5 rounded-full"
                         style={{ background: "rgba(245,158,11,0.1)", color: "#F59E0B" }}>
@@ -375,7 +427,6 @@ function DraftDetailModal({ broadcast: initialBroadcast, onClose, onSent }: {
                       </span>
                     )}
                   </div>
-
                   <div className="flex flex-col gap-3">
                     {templateFields.map(f => {
                       const val = editValues[f.key] ?? "";
@@ -388,32 +439,17 @@ function DraftDetailModal({ broadcast: initialBroadcast, onClose, onSent }: {
                             <label className="text-[12px] font-medium" style={{ color: "#F5F7FA" }}>
                               {f.label}{f.required && <span style={{ color: "#EF4444" }}>*</span>}
                             </label>
-                            <span className="text-[10px] px-1.5 py-0.5 rounded font-mono"
-                              style={{ background: "rgba(255,255,255,0.05)", color: "#8B95A7" }}>
-                              {f.key}
-                            </span>
-                            <span className="text-[10px] px-1.5 py-0.5 rounded"
-                              style={{ background: "rgba(255,255,255,0.04)", color: "#8B95A7" }}>
-                              {FIELD_TYPE_LABELS[f.type]}
-                            </span>
-                            {hasIssue && (
-                              <AlertCircle size={12} style={{ color: missingRequired ? "#EF4444" : "#F59E0B" }} />
-                            )}
+                            <span className="text-[10px] px-1.5 py-0.5 rounded font-mono" style={{ background: "rgba(255,255,255,0.05)", color: "#8B95A7" }}>{f.key}</span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.04)", color: "#8B95A7" }}>{FIELD_TYPE_LABELS[f.type]}</span>
+                            {hasIssue && <AlertCircle size={12} style={{ color: missingRequired ? "#EF4444" : "#F59E0B" }} />}
                           </div>
                           <FieldInput field={f} value={val} onChange={v => handleFieldChange(f.key, v)} />
-                          {typeWarn && !missingRequired && (
-                            <p className="text-[11px] mt-1 flex items-center gap-1" style={{ color: "#F59E0B" }}>
-                              <AlertCircle size={10} /> {typeWarn}
-                            </p>
-                          )}
-                          {missingRequired && (
-                            <p className="text-[11px] mt-1" style={{ color: "#EF4444" }}>This field is required</p>
-                          )}
+                          {typeWarn && !missingRequired && <p className="text-[11px] mt-1 flex items-center gap-1" style={{ color: "#F59E0B" }}><AlertCircle size={10} /> {typeWarn}</p>}
+                          {missingRequired && <p className="text-[11px] mt-1" style={{ color: "#EF4444" }}>This field is required</p>}
                         </div>
                       );
                     })}
                   </div>
-
                   {dirty && (
                     <div className="flex items-center gap-2 mt-3">
                       <button onClick={handleSaveCorrections} disabled={saving}
@@ -428,19 +464,15 @@ function DraftDetailModal({ broadcast: initialBroadcast, onClose, onSent }: {
                       {saveError && <span className="text-[11.5px]" style={{ color: "#EF4444" }}>{saveError}</span>}
                     </div>
                   )}
-                  {dirty && (
-                    <p className="text-[11px] mt-1.5" style={{ color: "#F59E0B" }}>
-                      Unsaved changes — save corrections before sending.
-                    </p>
-                  )}
+                  {dirty && <p className="text-[11px] mt-1.5" style={{ color: "#F59E0B" }}>Unsaved changes — save corrections before sending.</p>}
                 </section>
               )}
 
-              {/* ── Rendered Message Preview ── */}
+              {/* Rendered Message Preview */}
               <section>
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "#8B95A7" }}>
-                    Rendered Message
+                    {isUserTemplate ? "Preview (sample contact data)" : "Rendered Message"}
                   </span>
                   {dirty && <span className="text-[10.5px]" style={{ color: "#F59E0B" }}>Preview (unsaved)</span>}
                 </div>
@@ -448,18 +480,16 @@ function DraftDetailModal({ broadcast: initialBroadcast, onClose, onSent }: {
                   style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${dirty ? "rgba(245,158,11,0.3)" : "rgba(255,255,255,0.07)"}`, color: "#C8D0DC" }}>
                   {renderedMessage}
                 </div>
-                {!page && (
-                  <div className="mt-2 p-3 rounded-xl flex items-start gap-2 text-[12.5px]"
-                    style={{ background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.2)", color: "#F59E0B" }}>
-                    <AlertCircle size={14} className="shrink-0 mt-0.5" /> Facebook Page not loaded — please refresh.
-                  </div>
+                {isUserTemplate && (
+                  <p className="text-[11px] mt-1.5" style={{ color: "#8B95A7" }}>
+                    Contact fields shown with sample values. Each recipient receives their own personalized message.
+                  </p>
                 )}
               </section>
 
-              {/* ── Test Send ── */}
+              {/* Test Send */}
               <section>
-                <button
-                  onClick={() => { setTestOpen(o => !o); setTestResults(null); setTestError(""); }}
+                <button onClick={() => { setTestOpen(o => !o); setTestResults(null); setTestError(""); }}
                   className="w-full flex items-center justify-between px-4 py-3 rounded-xl text-left"
                   style={{ background: testOpen ? "rgba(108,99,255,0.08)" : "rgba(255,255,255,0.03)", border: `1px solid ${testOpen ? "rgba(108,99,255,0.2)" : "rgba(255,255,255,0.07)"}` }}>
                   <div className="flex items-center gap-2">
@@ -474,10 +504,11 @@ function DraftDetailModal({ broadcast: initialBroadcast, onClose, onSent }: {
                   <div className="mt-2 p-4 rounded-xl flex flex-col gap-3"
                     style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)" }}>
                     <p className="text-[11.5px]" style={{ color: "#8B95A7" }}>
-                      Sends the exact message to up to 5 contacts. No DB state changes — recipient statuses stay "pending". Use this to verify the message looks correct in Messenger before sending to all {recipientCount} recipients.
+                      {isUserTemplate
+                        ? "Sends a personalized message (real contact data) to up to 5 contacts. No DB state changes — recipient statuses stay \"pending\"."
+                        : `Sends the exact message to up to 5 contacts. No DB state changes — recipient statuses stay "pending". Use this to verify the message before sending to all ${recipientCount} recipients.`}
                     </p>
 
-                    {/* Test contact search */}
                     <div className="relative">
                       <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#8B95A7" }} />
                       <input type="text" placeholder="Search contacts…" value={testSearch}
@@ -496,15 +527,18 @@ function DraftDetailModal({ broadcast: initialBroadcast, onClose, onSent }: {
                         {testContacts.slice(0, 20).map(c => {
                           const checked = testSelected.has(c.id);
                           const canAdd = testSelected.size < 5 || checked;
+                          const ws = windowStatus(c);
+                          const dotColor = ws === "open" ? "#10B981" : ws === "closed" ? "#F59E0B" : "#8B95A7";
+                          const dotTitle = ws === "open" ? "Messaging window open" : ws === "closed" ? "Window closed (>24h)" : "No inbound message on record";
                           return (
-                            <button key={c.id} onClick={() => canAdd && toggleTestContact(c.id)}
-                              disabled={!canAdd}
+                            <button key={c.id} onClick={() => canAdd && toggleTestContact(c.id)} disabled={!canAdd}
                               className="flex items-center gap-2.5 p-2 rounded-lg text-left transition-all"
                               style={{ background: checked ? "rgba(108,99,255,0.08)" : "transparent", border: `1px solid ${checked ? "rgba(108,99,255,0.2)" : "transparent"}`, opacity: canAdd ? 1 : 0.4 }}>
                               <div className="w-4 h-4 rounded flex items-center justify-center shrink-0"
                                 style={{ background: checked ? "#6C63FF" : "rgba(255,255,255,0.08)", border: checked ? "none" : "1px solid rgba(255,255,255,0.15)" }}>
                                 {checked && <Check size={9} color="#fff" />}
                               </div>
+                              <div className="w-2 h-2 rounded-full shrink-0" style={{ background: dotColor }} title={dotTitle} />
                               <span className="text-[12px]" style={{ color: "#F5F7FA" }}>{contactDisplayName(c)}</span>
                             </button>
                           );
@@ -512,11 +546,13 @@ function DraftDetailModal({ broadcast: initialBroadcast, onClose, onSent }: {
                       </div>
                     )}
 
-                    {testSelected.size > 0 && (
-                      <p className="text-[11px]" style={{ color: "#8B85FF" }}>
-                        {testSelected.size} of 5 selected
-                      </p>
-                    )}
+                    <div className="flex items-center gap-3 text-[10.5px]" style={{ color: "#8B95A7" }}>
+                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block" style={{ background: "#10B981" }} /> Window open</span>
+                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block" style={{ background: "#F59E0B" }} /> Window closed</span>
+                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block" style={{ background: "#8B95A7" }} /> Never messaged</span>
+                    </div>
+
+                    {testSelected.size > 0 && <p className="text-[11px]" style={{ color: "#8B85FF" }}>{testSelected.size} of 5 selected</p>}
 
                     {testError && (
                       <div className="p-2.5 rounded-lg flex items-start gap-2 text-[12px]"
@@ -529,33 +565,25 @@ function DraftDetailModal({ broadcast: initialBroadcast, onClose, onSent }: {
                       <div className="flex flex-col gap-1.5">
                         {testResults.map(r => (
                           <div key={r.contactId} className="flex items-start gap-2 text-[12px]">
-                            {r.success
-                              ? <Check size={13} style={{ color: "#10B981" }} className="mt-0.5 shrink-0" />
-                              : <AlertCircle size={13} style={{ color: "#EF4444" }} className="mt-0.5 shrink-0" />}
+                            {r.success ? <Check size={13} style={{ color: "#10B981" }} className="mt-0.5 shrink-0" /> : <AlertCircle size={13} style={{ color: "#EF4444" }} className="mt-0.5 shrink-0" />}
                             <div>
                               <span style={{ color: "#F5F7FA" }}>{r.name}</span>
-                              {!r.success && r.error && (
-                                <span className="ml-1.5 text-[11px]" style={{ color: "#EF4444" }}>{r.error}</span>
-                              )}
+                              {!r.success && r.error && <span className="ml-1.5 text-[11px]" style={{ color: "#EF4444" }}>{r.error}</span>}
                             </div>
                           </div>
                         ))}
                       </div>
                     )}
 
-                    <button onClick={handleTestSend}
-                      disabled={testSelected.size === 0 || testSending || dirty}
+                    <button onClick={handleTestSend} disabled={testSelected.size === 0 || testSending || dirty}
                       className="flex items-center justify-center gap-2 py-2 rounded-lg text-[12.5px] font-semibold text-white"
                       style={{ background: "rgba(108,99,255,0.7)", opacity: (testSelected.size === 0 || testSending || dirty) ? 0.5 : 1 }}>
-                      {testSending
-                        ? <><Loader2 size={12} className="animate-spin" /> Sending test…</>
-                        : <><Send size={12} /> Send test to {testSelected.size || "?"} contact{testSelected.size !== 1 ? "s" : ""}</>}
+                      {testSending ? <><Loader2 size={12} className="animate-spin" /> Sending test…</> : <><Send size={12} /> Send test to {testSelected.size || "?"} contact{testSelected.size !== 1 ? "s" : ""}</>}
                     </button>
                   </div>
                 )}
               </section>
 
-              {/* ── Send errors ── */}
               {sendError && (
                 <div className="p-3 rounded-xl flex items-start gap-2 text-[12.5px]"
                   style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#EF4444" }}>
@@ -570,18 +598,15 @@ function DraftDetailModal({ broadcast: initialBroadcast, onClose, onSent }: {
         {!sendResult && (
           <div className="flex gap-3 px-6 py-4 shrink-0 border-t" style={{ borderColor: "rgba(255,255,255,0.07)" }}>
             {!isBusy && (
-              <button onClick={onClose}
-                className="flex-1 py-2.5 rounded-xl text-[13px] font-medium"
+              <button onClick={onClose} className="flex-1 py-2.5 rounded-xl text-[13px] font-medium"
                 style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#8B95A7" }}>
                 Cancel
               </button>
             )}
-            <button onClick={handleSendAll}
-              disabled={isBusy || dirty || fieldErrors > 0}
+            <button onClick={handleSendAll} disabled={isBusy || dirty || fieldErrors > 0}
               className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold text-white"
               style={{ background: "#6C63FF", opacity: (isBusy || dirty || fieldErrors > 0) ? 0.5 : 1 }}>
-              {sending
-                ? <><Loader2 size={14} className="animate-spin" /> Sending to {recipientCount}…</>
+              {sending ? <><Loader2 size={14} className="animate-spin" /> Sending to {recipientCount}…</>
                 : dirty ? "Save corrections first"
                 : fieldErrors > 0 ? "Fix required fields first"
                 : <><Send size={14} /> Send to All {recipientCount} Recipients</>}
@@ -610,10 +635,14 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
   const [step, setStep] = useState<Step>(1);
 
   const [pageId, setPageId] = useState(pages[0]?.id ?? "");
-  const [templates, setTemplates] = useState<GlobalTemplate[]>([]);
+
+  // Templates
+  const [globalTemplates, setGlobalTemplates] = useState<GlobalTemplate[]>([]);
+  const [userTemplates, setUserTemplates] = useState<UserTemplate[]>([]);
   const [tplLoading, setTplLoading] = useState(false);
   const [tplSearch, setTplSearch] = useState("");
-  const [selectedTemplate, setSelectedTemplate] = useState<GlobalTemplate | null>(null);
+  const [selectedTemplate, setSelectedTemplate] = useState<SelectedTemplate | null>(null);
+
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   const [broadcastName, setBroadcastName] = useState("");
   const [contacts, setContacts] = useState<ContactItem[]>([]);
@@ -626,23 +655,40 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
   const [saving, setSaving] = useState(false);
   const [sending, setSending] = useState(false);
   const [draftId, setDraftId] = useState<string | null>(null);
-  const [sendResult, setSendResult] = useState<{ sent: number; failed: number; status: string } | null>(null);
+  const [sendResult, setSendResult] = useState<{ sent: number; failed: number; ineligible: number; status: string } | null>(null);
   const [error, setError] = useState("");
 
   const selectedPage = pages.find(p => p.id === pageId);
 
+  // Derived template data regardless of source
+  const templateContent = selectedTemplate?.data.content ?? "";
+  const templateAllFields = (selectedTemplate?.data.fields ?? []) as TemplateField[];
+  const isUserTpl = selectedTemplate?.source === "user";
+
+  // For user templates: custom fields only (contact vars are auto)
+  const customFields = isUserTpl
+    ? templateAllFields.filter(f => !CONTACT_VARS.has(f.key))
+    : templateAllFields;
+  const contactVarsInTpl = isUserTpl
+    ? templateAllFields.filter(f => CONTACT_VARS.has(f.key))
+    : [];
+
+  // Step 2: load templates
   useEffect(() => {
     if (step !== 2) return;
     setTplLoading(true);
     const params = new URLSearchParams();
     if (tplSearch) params.set("search", tplSearch);
-    fetch(`/api/broadcast-templates?${params}`)
-      .then(r => r.ok ? r.json() : null)
-      .then((d: { templates?: GlobalTemplate[] } | null) => { if (d?.templates) setTemplates(d.templates); })
-      .catch(() => {})
-      .finally(() => setTplLoading(false));
+    Promise.all([
+      fetch(`/api/broadcast-templates?${params}`).then(r => r.ok ? r.json() : null),
+      fetch(`/api/templates?limit=50${tplSearch ? `&search=${encodeURIComponent(tplSearch)}` : ""}`).then(r => r.ok ? r.json() : null),
+    ]).then(([global, user]) => {
+      if (global?.templates) setGlobalTemplates(global.templates as GlobalTemplate[]);
+      if (user?.templates) setUserTemplates(user.templates as UserTemplate[]);
+    }).catch(() => {}).finally(() => setTplLoading(false));
   }, [step, tplSearch]);
 
+  // Step 4: load contacts
   useEffect(() => {
     if (step !== 4 || !pageId) return;
     setContactsLoading(true);
@@ -655,12 +701,14 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
       .finally(() => setContactsLoading(false));
   }, [step, pageId, contactSearch]);
 
+  // Reset field values when template changes
   useEffect(() => {
     if (selectedTemplate) {
       const initial: Record<string, string> = {};
-      (selectedTemplate.fields ?? []).forEach(f => { initial[f.key] = ""; });
+      customFields.forEach(f => { initial[f.key] = ""; });
       setFieldValues(initial);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTemplate]);
 
   const handleSelectAll = (checked: boolean) => {
@@ -668,11 +716,13 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
     setSelectedContacts(checked ? new Set(contacts.map(c => c.id)) : new Set());
   };
 
-  const renderedMessage = selectedTemplate ? renderTemplate(selectedTemplate.content, fieldValues) : "";
+  // Preview: contact vars shown as samples, custom vars filled from fieldValues
+  const previewMessage = templateContent
+    ? renderPreview(templateContent, fieldValues, selectedPage?.name)
+    : "";
 
   const fieldsValid = (): boolean => {
-    if (!selectedTemplate) return false;
-    for (const f of (selectedTemplate.fields ?? [])) {
+    for (const f of customFields) {
       if (f.required && !(fieldValues[f.key] ?? "").trim()) return false;
     }
     return true;
@@ -686,7 +736,6 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
     return !saving && !sending;
   };
 
-  // Step 5 "Continue" creates the draft, then immediately sends
   const handleStep5 = async () => {
     if (!selectedTemplate || !pageId) return;
     setSaving(true);
@@ -695,10 +744,14 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
       const body: Record<string, unknown> = {
         name: broadcastName.trim(),
         pageId,
-        templateId: selectedTemplate.id,
         fieldValues,
         contactIds: [...selectedContacts],
       };
+      if (selectedTemplate.source === "global") {
+        body.templateId = selectedTemplate.data.id;
+      } else {
+        body.messageTemplateId = selectedTemplate.data.id;
+      }
       if (schedule === "later" && schedDate) body.scheduledAt = schedDate;
 
       const res = await fetch("/api/broadcasts", {
@@ -717,29 +770,26 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
       setDraftId(broadcast.id);
 
       if (schedule === "later") {
-        // Scheduled — done without sending now
-        setSendResult({ sent: 0, failed: 0, status: "scheduled" });
+        setSendResult({ sent: 0, failed: 0, ineligible: 0, status: "scheduled" });
         onCreated();
         return;
       }
 
-      // Send immediately
       setSaving(false);
       setSending(true);
       const sendRes = await fetch(`/api/broadcasts/${broadcast.id}/send`, { method: "POST" });
-      const sendData = await sendRes.json() as {
-        status?: string; sent?: number; failed?: number; error?: string;
-      };
+      const sendData = await sendRes.json() as { status?: string; sent?: number; failed?: number; ineligible?: number; error?: string };
 
       if (!sendRes.ok) {
         setError(sendData.error ?? "Broadcast saved as draft but sending failed.");
-        onCreated(); // reload list so draft appears
+        onCreated();
         return;
       }
 
       setSendResult({
         sent: sendData.sent ?? 0,
         failed: sendData.failed ?? 0,
+        ineligible: sendData.ineligible ?? 0,
         status: sendData.status ?? "completed",
       });
       onCreated();
@@ -807,7 +857,8 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
             {sendResult.status === "completed" && (
               <div className="flex items-center gap-4 text-[13px]">
                 <span style={{ color: "#10B981" }}>{sendResult.sent} sent</span>
-                {sendResult.failed > 0 && <span style={{ color: "#EF4444" }}>{sendResult.failed} failed</span>}
+                {sendResult.ineligible > 0 && <span style={{ color: "#F59E0B" }}>{sendResult.ineligible} window closed</span>}
+                {(sendResult.failed - sendResult.ineligible) > 0 && <span style={{ color: "#EF4444" }}>{sendResult.failed - sendResult.ineligible} failed</span>}
               </div>
             )}
             <button onClick={onClose} className="mt-1 px-5 py-2 rounded-xl text-[13px] font-semibold text-white" style={{ background: "#6C63FF" }}>Done</button>
@@ -838,44 +889,94 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
                 </div>
               )}
 
-              {/* Step 2: Template */}
+              {/* Step 2: Template — global + user */}
               {step === 2 && (
                 <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-wider mb-3" style={{ color: "#8B95A7" }}>Choose a Message Template</p>
                   <div className="relative mb-3">
                     <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#8B95A7" }} />
                     <input type="text" placeholder="Search templates…" value={tplSearch}
                       onChange={e => setTplSearch(e.target.value)}
                       className="w-full pl-9 pr-3 py-2 rounded-lg text-[13px] outline-none" style={inp} />
                   </div>
+
                   {tplLoading ? (
                     <div className="flex flex-col gap-2">
                       {[1, 2, 3].map(i => <div key={i} className="h-16 rounded-xl animate-pulse" style={{ background: "rgba(255,255,255,0.04)" }} />)}
                     </div>
-                  ) : templates.length === 0 ? (
-                    <div className="py-8 text-center text-[13px]" style={{ color: "#8B95A7" }}>
-                      {tplSearch ? "No templates match your search." : "No active templates available. Ask your admin to create one."}
-                    </div>
-                  ) : templates.map(t => (
-                    <button key={t.id} onClick={() => setSelectedTemplate(t)}
-                      className="w-full flex items-start gap-3 p-3.5 rounded-xl mb-2 text-left transition-all"
-                      style={{ background: selectedTemplate?.id === t.id ? "rgba(108,99,255,0.1)" : "rgba(255,255,255,0.03)", border: `1px solid ${selectedTemplate?.id === t.id ? "rgba(108,99,255,0.3)" : "rgba(255,255,255,0.07)"}` }}>
-                      <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5" style={{ background: "rgba(108,99,255,0.12)" }}>
-                        <FileText size={14} style={{ color: "#8B85FF" }} />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[13px] font-semibold" style={{ color: "#F5F7FA" }}>{t.name}</span>
-                          {t.category && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.06)", color: "#8B95A7" }}>{t.category}</span>}
+                  ) : (
+                    <>
+                      {/* My Templates */}
+                      {userTemplates.length > 0 && (
+                        <div className="mb-4">
+                          <p className="text-[11px] font-semibold uppercase tracking-wider mb-2" style={{ color: "#8B95A7" }}>My Templates</p>
+                          {userTemplates.map(t => {
+                            const isSelected = selectedTemplate?.source === "user" && selectedTemplate.data.id === t.id;
+                            const customCount = (t.fields ?? []).filter(f => !CONTACT_VARS.has(f.key)).length;
+                            const contactCount = (t.fields ?? []).filter(f => CONTACT_VARS.has(f.key)).length;
+                            return (
+                              <button key={t.id} onClick={() => setSelectedTemplate({ source: "user", data: t })}
+                                className="w-full flex items-start gap-3 p-3.5 rounded-xl mb-2 text-left transition-all"
+                                style={{ background: isSelected ? "rgba(108,99,255,0.1)" : "rgba(255,255,255,0.03)", border: `1px solid ${isSelected ? "rgba(108,99,255,0.3)" : "rgba(255,255,255,0.07)"}` }}>
+                                <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5" style={{ background: "rgba(108,99,255,0.12)" }}>
+                                  <FileText size={14} style={{ color: "#8B85FF" }} />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-[13px] font-semibold" style={{ color: "#F5F7FA" }}>{t.name}</span>
+                                    {t.category && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.06)", color: "#8B95A7" }}>{t.category}</span>}
+                                    {contactCount > 0 && (
+                                      <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(16,185,129,0.08)", color: "#10B981" }}>Personalized</span>
+                                    )}
+                                  </div>
+                                  <p className="text-[11px] mt-0.5 truncate font-mono" style={{ color: "#8B95A7" }}>{t.content}</p>
+                                  {customCount > 0 && (
+                                    <p className="text-[10.5px] mt-0.5" style={{ color: "#6C63FF" }}>{customCount} custom field{customCount !== 1 ? "s" : ""} to fill</p>
+                                  )}
+                                </div>
+                                {isSelected && <Check size={14} style={{ color: "#6C63FF" }} className="mt-1 shrink-0" />}
+                              </button>
+                            );
+                          })}
                         </div>
-                        {t.description && <p className="text-[12px] mt-0.5 truncate" style={{ color: "#8B95A7" }}>{t.description}</p>}
-                        {t.fields && t.fields.length > 0 && (
-                          <p className="text-[11px] mt-1" style={{ color: "#6C63FF" }}>{t.fields.length} editable field{t.fields.length !== 1 ? "s" : ""}</p>
-                        )}
-                      </div>
-                      {selectedTemplate?.id === t.id && <Check size={14} style={{ color: "#6C63FF" }} className="mt-1 shrink-0" />}
-                    </button>
-                  ))}
+                      )}
+
+                      {/* Admin Templates */}
+                      {globalTemplates.length > 0 && (
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-wider mb-2" style={{ color: "#8B95A7" }}>Admin Templates</p>
+                          {globalTemplates.map(t => {
+                            const isSelected = selectedTemplate?.source === "global" && selectedTemplate.data.id === t.id;
+                            return (
+                              <button key={t.id} onClick={() => setSelectedTemplate({ source: "global", data: t })}
+                                className="w-full flex items-start gap-3 p-3.5 rounded-xl mb-2 text-left transition-all"
+                                style={{ background: isSelected ? "rgba(108,99,255,0.1)" : "rgba(255,255,255,0.03)", border: `1px solid ${isSelected ? "rgba(108,99,255,0.3)" : "rgba(255,255,255,0.07)"}` }}>
+                                <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5" style={{ background: "rgba(108,99,255,0.12)" }}>
+                                  <FileText size={14} style={{ color: "#8B85FF" }} />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[13px] font-semibold" style={{ color: "#F5F7FA" }}>{t.name}</span>
+                                    {t.category && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.06)", color: "#8B95A7" }}>{t.category}</span>}
+                                  </div>
+                                  {t.description && <p className="text-[12px] mt-0.5 truncate" style={{ color: "#8B95A7" }}>{t.description}</p>}
+                                  {t.fields && t.fields.length > 0 && (
+                                    <p className="text-[11px] mt-1" style={{ color: "#6C63FF" }}>{t.fields.length} editable field{t.fields.length !== 1 ? "s" : ""}</p>
+                                  )}
+                                </div>
+                                {isSelected && <Check size={14} style={{ color: "#6C63FF" }} className="mt-1 shrink-0" />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {userTemplates.length === 0 && globalTemplates.length === 0 && (
+                        <div className="py-8 text-center text-[13px]" style={{ color: "#8B95A7" }}>
+                          {tplSearch ? "No templates match your search." : "No templates yet. Create one in Templates, or ask your admin."}
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
               )}
 
@@ -885,13 +986,32 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
                   <div>
                     <label className="text-[11px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: "#8B95A7" }}>Broadcast Name *</label>
                     <input value={broadcastName} onChange={e => setBroadcastName(e.target.value)}
-                      placeholder="e.g. Weekend Promo — Aug 2026"
+                      placeholder="e.g. August Appointment Reminders"
                       className="w-full px-3 py-2.5 rounded-lg text-[13px] outline-none" style={inp} />
                   </div>
-                  {(selectedTemplate.fields ?? []).length > 0 ? (
+
+                  {/* Contact vars badge for user templates */}
+                  {isUserTpl && contactVarsInTpl.length > 0 && (
+                    <div className="mt-4 p-3 rounded-xl" style={{ background: "rgba(16,185,129,0.05)", border: "1px solid rgba(16,185,129,0.15)" }}>
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <Check size={12} style={{ color: "#10B981" }} />
+                        <span className="text-[11px] font-semibold" style={{ color: "#10B981" }}>Auto-personalized per recipient</span>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {contactVarsInTpl.map(f => (
+                          <span key={f.key} className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: "rgba(16,185,129,0.1)", color: "#10B981" }}>
+                            {`{{${f.key}}}`}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Custom fields */}
+                  {customFields.length > 0 ? (
                     <div className="mt-4 flex flex-col gap-3">
                       <p className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "#8B95A7" }}>Fill in the editable fields</p>
-                      {(selectedTemplate.fields ?? []).map(f => (
+                      {customFields.map(f => (
                         <div key={f.key}>
                           <label className="flex items-center gap-1 text-[12px] font-medium mb-1.5" style={{ color: "#F5F7FA" }}>
                             {f.label}{f.required && <span style={{ color: "#EF4444" }}>*</span>}
@@ -907,17 +1027,26 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
                         </div>
                       ))}
                     </div>
-                  ) : (
+                  ) : !isUserTpl ? (
                     <div className="mt-4 p-3 rounded-xl text-[12.5px]" style={{ background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.15)", color: "#10B981" }}>
                       This template has no editable fields — the message is fully fixed.
                     </div>
-                  )}
+                  ) : null}
+
+                  {/* Live preview */}
                   <div className="mt-4">
-                    <p className="text-[11px] font-semibold uppercase tracking-wider mb-2" style={{ color: "#8B95A7" }}>Live Preview</p>
+                    <p className="text-[11px] font-semibold uppercase tracking-wider mb-2" style={{ color: "#8B95A7" }}>
+                      {isUserTpl ? "Preview (sample contact data)" : "Live Preview"}
+                    </p>
                     <div className="p-3 rounded-xl text-[12.5px] whitespace-pre-wrap font-mono leading-relaxed"
                       style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", color: "#C8D0DC" }}>
-                      {renderedMessage || <span style={{ color: "#8B95A7" }}>(preview appears as you fill in fields)</span>}
+                      {previewMessage || <span style={{ color: "#8B95A7" }}>(preview appears as you fill in fields)</span>}
                     </div>
+                    {isUserTpl && (
+                      <p className="text-[10.5px] mt-1.5" style={{ color: "#8B95A7" }}>
+                        Contact variables shown with sample values. Each recipient receives their own personalized message.
+                      </p>
+                    )}
                   </div>
                 </div>
               )}
@@ -991,17 +1120,31 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
                     <div className="flex flex-col gap-2 text-[12.5px]">
                       <div className="flex justify-between"><span style={{ color: "#8B95A7" }}>Name</span><span style={{ color: "#F5F7FA" }}>{broadcastName}</span></div>
                       <div className="flex justify-between"><span style={{ color: "#8B95A7" }}>Page</span><span style={{ color: "#F5F7FA" }}>{selectedPage?.name}</span></div>
-                      <div className="flex justify-between"><span style={{ color: "#8B95A7" }}>Template</span><span style={{ color: "#F5F7FA" }}>{selectedTemplate.name}</span></div>
+                      <div className="flex justify-between"><span style={{ color: "#8B95A7" }}>Template</span>
+                        <span className="flex items-center gap-1.5" style={{ color: "#F5F7FA" }}>
+                          {selectedTemplate.data.name}
+                          {isUserTpl && <span className="text-[9.5px] px-1.5 py-0.5 rounded" style={{ background: "rgba(16,185,129,0.1)", color: "#10B981" }}>Personalized</span>}
+                        </span>
+                      </div>
                       <div className="flex justify-between"><span style={{ color: "#8B95A7" }}>Recipients</span><span style={{ color: "#F5F7FA" }}>{selectedContacts.size.toLocaleString()}</span></div>
                     </div>
                   </div>
+
                   <div className="mb-4">
-                    <div className="text-[11px] font-semibold uppercase tracking-wider mb-2" style={{ color: "#8B95A7" }}>Final Message</div>
+                    <div className="text-[11px] font-semibold uppercase tracking-wider mb-2" style={{ color: "#8B95A7" }}>
+                      {isUserTpl ? "Preview (sample contact data)" : "Final Message"}
+                    </div>
                     <div className="p-3 rounded-xl text-[12.5px] whitespace-pre-wrap font-mono leading-relaxed"
                       style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", color: "#C8D0DC" }}>
-                      {renderedMessage}
+                      {previewMessage}
                     </div>
+                    {isUserTpl && (
+                      <p className="text-[10.5px] mt-1.5" style={{ color: "#8B95A7" }}>
+                        Each recipient will receive a personalized version with their own name and contact data.
+                      </p>
+                    )}
                   </div>
+
                   <div className="mb-4">
                     <div className="text-[11px] font-semibold uppercase tracking-wider mb-2" style={{ color: "#8B95A7" }}>When to send</div>
                     <div className="flex flex-col gap-2">
@@ -1020,6 +1163,7 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
                         className="w-full px-3 py-2.5 rounded-lg text-[13px] outline-none mt-2" style={inp} />
                     )}
                   </div>
+
                   {error && (
                     <div className="p-3 rounded-xl flex items-start gap-2 text-[12.5px]"
                       style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#EF4444" }}>
@@ -1047,11 +1191,9 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
               <button onClick={goNext} disabled={!canAdvance()}
                 className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold text-white transition-all"
                 style={{ background: "#6C63FF", opacity: canAdvance() ? 1 : 0.4 }}>
-                {sending ? (
-                  <><Loader2 size={14} className="animate-spin" /> Sending…</>
-                ) : saving ? (
-                  <><Loader2 size={14} className="animate-spin" /> Saving…</>
-                ) : step < 5 ? "Continue"
+                {sending ? <><Loader2 size={14} className="animate-spin" /> Sending…</>
+                  : saving ? <><Loader2 size={14} className="animate-spin" /> Saving…</>
+                  : step < 5 ? "Continue"
                   : schedule === "now" ? <><Send size={14} /> Send Now</>
                   : "Schedule Broadcast"}
               </button>
@@ -1095,7 +1237,7 @@ export default function BroadcastsPage() {
       <div className="flex items-start justify-between mb-6">
         <div>
           <h1 className="text-[20px] font-semibold mb-1" style={{ color: "#F5F7FA" }}>Broadcasts</h1>
-          <p className="text-[13px]" style={{ color: "#8B95A7" }}>Send bulk messages using admin-approved templates.</p>
+          <p className="text-[13px]" style={{ color: "#8B95A7" }}>Send personalized bulk messages using your templates or admin-approved templates.</p>
         </div>
         <button onClick={() => setShowWizard(true)}
           className="flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-semibold text-white"
@@ -1115,7 +1257,7 @@ export default function BroadcastsPage() {
           <Radio size={36} style={{ color: "#8B95A7", opacity: 0.25 }} />
           <div className="text-[15px] font-semibold" style={{ color: "#F5F7FA" }}>No broadcasts yet</div>
           <div className="text-[13px] text-center max-w-xs" style={{ color: "#8B95A7" }}>
-            Create your first broadcast using an admin-approved message template.
+            Create your first broadcast using your message templates or an admin-approved template.
           </div>
           <button onClick={() => setShowWizard(true)}
             className="mt-2 flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-semibold text-white"
@@ -1138,8 +1280,7 @@ export default function BroadcastsPage() {
                 const sc = STATUS_COLORS[b.status] ?? STATUS_COLORS.draft;
                 const isDraft = b.status === "draft";
                 return (
-                  <tr
-                    key={b.id}
+                  <tr key={b.id}
                     onClick={isDraft ? () => setSelectedDraft(b) : undefined}
                     className={isDraft ? "cursor-pointer" : ""}
                     style={{
@@ -1157,6 +1298,11 @@ export default function BroadcastsPage() {
                           <span className="text-[10px] px-1.5 py-0.5 rounded font-medium flex items-center gap-1"
                             style={{ background: "rgba(108,99,255,0.12)", color: "#8B85FF" }}>
                             <Send size={8} /> Send
+                          </span>
+                        )}
+                        {b.messageTemplateId && (
+                          <span className="text-[9.5px] px-1.5 py-0.5 rounded" style={{ background: "rgba(16,185,129,0.08)", color: "#10B981" }}>
+                            Personalized
                           </span>
                         )}
                       </div>

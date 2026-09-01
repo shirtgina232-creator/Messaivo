@@ -77,8 +77,9 @@ model FacebookPage {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  conversations Conversation[]
-  contacts      Contact[]
+  conversations     Conversation[]
+  contacts          Contact[]
+  messageTemplates  MessageTemplate[]
 
   @@unique([workspaceId, pageId])
 }
@@ -169,10 +170,17 @@ model Broadcast {
 
   name         String
   pageId       String?
+
+  // GlobalTemplate path (existing — unchanged)
   templateId   String?
   template     GlobalTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  // MessageTemplate path (new — user-created templates)
+  messageTemplateId String?
+  messageTemplate   MessageTemplate? @relation(fields: [messageTemplateId], references: [id], onDelete: SetNull)
+
   templateName String?
-  message      String
+  message      String   // raw template for MessageTemplate broadcasts; pre-rendered for GlobalTemplate
   fieldValues  Json?
 
   status       String   @default("draft")
@@ -223,8 +231,17 @@ model MessageTemplate {
   tags       String[] @default([])
   usageCount Int      @default(0)
 
+  // Structured variable definitions auto-detected from {{variable}} tokens in content
+  fields     Json?
+
+  // Optional: associate template with a specific Facebook Page (null = workspace-wide)
+  pageId     String?
+  page       FacebookPage? @relation(fields: [pageId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  broadcasts Broadcast[]
 }
 
 // Contact Groups

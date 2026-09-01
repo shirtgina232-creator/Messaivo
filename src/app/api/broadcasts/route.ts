@@ -58,7 +58,7 @@ export async function POST(req: Request) {
       return badRequest("Invalid JSON body");
     }
 
-    const { name, message, pageId, templateId, fieldValues, scheduledAt, contactIds } = body as Record<string, unknown>;
+    const { name, message, pageId, templateId, messageTemplateId, fieldValues, scheduledAt, contactIds } = body as Record<string, unknown>;
 
     if (!name || typeof name !== "string" || !name.trim()) return badRequest("name is required");
 
@@ -74,9 +74,57 @@ export async function POST(req: Request) {
     let finalMessage: string;
     let resolvedTemplateName: string | null = null;
     let resolvedFieldValues: Record<string, string> | null = null;
+    let resolvedTemplateId: string | null = null;
+    let resolvedMessageTemplateId: string | null = null;
 
-    if (templateId && typeof templateId === "string") {
-      // Template path: validate template, render message from field values
+    if (messageTemplateId && typeof messageTemplateId === "string") {
+      // User-template path: store raw content; render per-recipient at send time
+      const tpl = await prisma.messageTemplate.findFirst({
+        where: { id: messageTemplateId, workspaceId: ws.id },
+        select: { id: true, name: true, content: true, fields: true },
+      });
+      if (!tpl) return badRequest("Template not found");
+
+      const fields = ((tpl.fields ?? []) as unknown) as TemplateField[];
+      const values = (typeof fieldValues === "object" && fieldValues !== null && !Array.isArray(fieldValues))
+        ? fieldValues as Record<string, string>
+        : {};
+
+      // Validate only custom (non-contact) fields — contact vars are auto-resolved at send time
+      const CONTACT_VARS = new Set(["first_name", "last_name", "name", "page_name"]);
+      const customFields = fields.filter(f => !CONTACT_VARS.has(f.key));
+      for (const field of customFields) {
+        const val = (values[field.key] ?? "").trim();
+        if (field.required && !val) {
+          return badRequest(`Field "${field.label}" is required`);
+        }
+        if (val && field.type === "URL") {
+          try { new URL(val); } catch { return badRequest(`Field "${field.label}" must be a valid URL (include https://)`); }
+        }
+        if (val && (field.type === "NUMBER" || field.type === "CURRENCY") && isNaN(Number(val))) {
+          return badRequest(`Field "${field.label}" must be a number`);
+        }
+        if (val && field.maxLength && val.length > field.maxLength) {
+          return badRequest(`Field "${field.label}" exceeds maximum length of ${field.maxLength} characters`);
+        }
+      }
+
+      // Store raw template — NOT pre-rendered; contact vars resolved per-recipient at send time
+      finalMessage = tpl.content;
+      resolvedTemplateName = tpl.name;
+      resolvedFieldValues = Object.fromEntries(
+        Object.entries(values).filter(([k]) => !CONTACT_VARS.has(k))
+      );
+      resolvedMessageTemplateId = tpl.id;
+
+      // Increment usage count
+      await prisma.messageTemplate.update({
+        where: { id: tpl.id },
+        data: { usageCount: { increment: 1 } },
+      });
+
+    } else if (templateId && typeof templateId === "string") {
+      // GlobalTemplate path — unchanged behavior: pre-render message from field values
       const tpl = await prisma.globalTemplate.findUnique({
         where: { id: templateId },
         select: { id: true, name: true, content: true, fields: true, isActive: true },
@@ -110,12 +158,13 @@ export async function POST(req: Request) {
       finalMessage = renderTemplate(tpl.content, values as Record<string, string>);
       resolvedTemplateName = tpl.name;
       resolvedFieldValues = values as Record<string, string>;
+      resolvedTemplateId = tpl.id;
 
     } else if (message && typeof message === "string" && message.trim()) {
       // Legacy direct-message path (backward compatibility)
       finalMessage = message.trim();
     } else {
-      return badRequest("Either templateId or message is required");
+      return badRequest("Either messageTemplateId, templateId, or message is required");
     }
 
     // Validate contactIds belong to this workspace before creating recipients
@@ -137,7 +186,8 @@ export async function POST(req: Request) {
         name: name.trim(),
         message: finalMessage,
         pageId: typeof pageId === "string" ? pageId : null,
-        templateId: typeof templateId === "string" ? templateId : null,
+        templateId: resolvedTemplateId,
+        messageTemplateId: resolvedMessageTemplateId,
         templateName: resolvedTemplateName,
         fieldValues: resolvedFieldValues ?? undefined,
         scheduledAt: typeof scheduledAt === "string" ? new Date(scheduledAt) : null,

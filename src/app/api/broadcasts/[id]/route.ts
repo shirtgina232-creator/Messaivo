@@ -18,6 +18,7 @@ export async function GET(
       include: {
         _count: { select: { recipients: true } },
         template: { select: { fields: true, content: true } },
+        messageTemplate: { select: { fields: true, content: true } },
       },
     });
 
@@ -60,14 +61,15 @@ export async function PATCH(
       return badRequest(`status must be one of: ${VALID_STATUSES.join(", ")}`);
     }
 
-    // When fieldValues are corrected, re-render the message from the stored template
+    // For GlobalTemplate broadcasts: re-render message when fieldValues are corrected.
+    // For MessageTemplate broadcasts: message is the raw template — never re-render here.
     let renderedMessage: string | undefined;
     if (fieldValues !== undefined && typeof fieldValues === "object" && fieldValues !== null && !Array.isArray(fieldValues)) {
       const full = await prisma.broadcast.findFirst({
         where: { id, workspaceId: ws.id },
-        select: { templateId: true },
+        select: { templateId: true, messageTemplateId: true },
       });
-      if (full?.templateId) {
+      if (full?.templateId && !full.messageTemplateId) {
         const tpl = await prisma.globalTemplate.findUnique({
           where: { id: full.templateId },
           select: { content: true },
@@ -77,6 +79,7 @@ export async function PATCH(
           renderedMessage = tpl.content.replace(/\{\{(\w+)\}\}/g, (_, key) => vals[key] ?? "");
         }
       }
+      // MessageTemplate: fieldValues stored as-is; raw template in message remains unchanged
     }
 
     const updated = await prisma.broadcast.update({

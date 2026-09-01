@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { Prisma } from "@prisma/client";
 import {
   getWorkspace, unauthorized, notFound, badRequest, serverError, ok, noContent,
 } from "@/lib/api-helpers";
@@ -46,17 +47,29 @@ export async function PATCH(
       return badRequest("Invalid JSON body");
     }
 
-    const { name, content, category, tags } = body as Record<string, unknown>;
+    const { name, content, category, tags, fields, pageId } = body as Record<string, unknown>;
+
+    // Validate pageId if provided
+    if (pageId !== undefined && pageId !== null) {
+      const page = await prisma.facebookPage.findFirst({
+        where: { id: pageId as string, workspaceId: ws.id },
+        select: { id: true },
+      });
+      if (!page) return badRequest("Invalid pageId");
+    }
+
+    // Build update using unchecked input to allow scalar pageId writes
+    const updateData: Prisma.MessageTemplateUncheckedUpdateInput = {};
+    if (typeof name === "string" && name.trim()) updateData.name = name.trim();
+    if (typeof content === "string" && content.trim()) updateData.content = content.trim();
+    if (typeof category === "string") updateData.category = category;
+    if (Array.isArray(tags)) updateData.tags = (tags as unknown[]).filter((t): t is string => typeof t === "string");
+    if (fields !== undefined) updateData.fields = Array.isArray(fields) ? (fields as Prisma.InputJsonValue) : Prisma.JsonNull;
+    if (pageId !== undefined) updateData.pageId = typeof pageId === "string" ? pageId : null;
+
     const updated = await prisma.messageTemplate.update({
       where: { id },
-      data: {
-        ...(typeof name === "string" && name.trim() && { name: name.trim() }),
-        ...(typeof content === "string" && content.trim() && { content: content.trim() }),
-        ...(typeof category === "string" && { category }),
-        ...(Array.isArray(tags) && {
-          tags: (tags as unknown[]).filter((t): t is string => typeof t === "string"),
-        }),
-      },
+      data: updateData,
     });
 
     return ok({ template: updated });
