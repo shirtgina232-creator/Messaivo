@@ -14,7 +14,7 @@ import FinalCTA from "@/components/FinalCTA";
 import Footer from "@/components/Footer";
 
 export const metadata: Metadata = {
-  title: "Messaivo — Facebook Messenger CRM for Business",
+  title: { absolute: "Messaivo — Facebook Messenger CRM for Business" },
   description:
     "Manage Facebook Messenger conversations, organize your audience, send permitted broadcasts, and collaborate as a team — from one intelligent workspace. Built for businesses using Facebook Pages.",
   alternates: { canonical: "https://messaivo.com" },

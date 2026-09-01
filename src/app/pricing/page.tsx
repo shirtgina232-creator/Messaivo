@@ -8,7 +8,7 @@ import Footer from "@/components/Footer";
 import { Check } from "lucide-react";
 
 export const metadata: Metadata = {
-  title: "Pricing — Messaivo",
+  title: "Pricing",
   description:
     "Messaivo pricing starts at $19/month for solo operators and scales to $99/month for established businesses. All plans include unified Messenger inbox, audience management, and message templates. Save 20% with annual billing.",
   alternates: { canonical: "https://messaivo.com/pricing" },

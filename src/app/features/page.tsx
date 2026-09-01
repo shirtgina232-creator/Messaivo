@@ -8,7 +8,7 @@ import FinalCTA from "@/components/FinalCTA";
 import Footer from "@/components/Footer";
 
 export const metadata: Metadata = {
-  title: "Features — Messaivo",
+  title: "Features",
   description:
     "Explore Messaivo's full feature set: unified Messenger inbox across multiple Facebook Pages, audience management and contact organization, reusable message templates with variables, permitted broadcasts, team roles, and conversation analytics.",
   alternates: { canonical: "https://messaivo.com/features" },

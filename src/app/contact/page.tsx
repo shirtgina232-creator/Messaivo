@@ -5,7 +5,7 @@ import { Mail, Clock, HelpCircle, MessageSquare } from "lucide-react";
 import Link from "next/link";
 
 export const metadata: Metadata = {
-  title: "Contact — Messaivo",
+  title: "Contact",
   description:
     "Get help with Messaivo. Reach our support team by email at hello@messaivo.com. We respond within one business day.",
   alternates: { canonical: "https://messaivo.com/contact" },
