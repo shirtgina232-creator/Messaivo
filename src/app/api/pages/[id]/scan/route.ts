@@ -59,6 +59,15 @@ export async function POST(
           const customer = thread.participants.data.find(p => p.id !== page.pageId);
           if (!customer) continue;
 
+          // Find the most recent inbound message (from user, not page) across all messages in this thread
+          const threadMsgs = thread.messages?.data ?? [];
+          const latestInboundAt = threadMsgs
+            .filter(m => m.from?.id !== page.pageId)
+            .reduce<Date | null>((max, m) => {
+              const t = new Date(m.created_time);
+              return max === null || t > max ? t : max;
+            }, null);
+
           const contact = await prisma.contact.upsert({
             where: { workspaceId_metaUserId: { workspaceId: page.workspaceId, metaUserId: customer.id } },
             update: { ...(customer.name ? { name: customer.name } : {}) },
@@ -68,11 +77,25 @@ export async function POST(
               metaUserId: customer.id,
               name: customer.name ?? null,
               isSubscribed: true,
+              ...(latestInboundAt ? { lastMessageAt: latestInboundAt } : {}),
             },
           });
+
+          // Backfill lastMessageAt only when the scan found a newer inbound timestamp
+          // (never overwrite a more recent webhook-set value)
+          if (latestInboundAt) {
+            await prisma.contact.updateMany({
+              where: {
+                id: contact.id,
+                OR: [{ lastMessageAt: null }, { lastMessageAt: { lt: latestInboundAt } }],
+              },
+              data: { lastMessageAt: latestInboundAt },
+            });
+          }
+
           batchStats.contactsUpserted++;
 
-          const msgs = thread.messages?.data ?? [];
+          const msgs = threadMsgs;
           const latestMsgTime = msgs.length > 0
             ? new Date(Math.max(...msgs.map(m => new Date(m.created_time).getTime())))
             : null;
