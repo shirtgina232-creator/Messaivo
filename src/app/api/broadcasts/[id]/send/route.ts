@@ -125,6 +125,9 @@ export async function POST(
         messageToSend,
       );
 
+      // Meta rate-limit compliance: ~100ms between API calls
+      await new Promise(r => setTimeout(r, 100));
+
       if (result.error) {
         failedCount++;
         failedUpdates.push({

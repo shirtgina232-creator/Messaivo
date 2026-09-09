@@ -62,8 +62,19 @@ type BroadcastItem = {
   sent?: number;
   failed?: number;
   totalRecipients?: number;
+  ineligibleCount?: number;
+  skippedCount?: number;
+  startedAt?: string | null;
+  completedAt?: string | null;
   _count?: { recipients: number };
 };
+
+interface EligibilityResult {
+  total: number;
+  eligible: number;
+  ineligible: number;
+  skipped: number;
+}
 
 // Template union used inside the wizard
 type SelectedTemplate =
@@ -621,36 +632,48 @@ function DraftDetailModal({ broadcast: initialBroadcast, onClose, onSent }: {
 
 // ── New Broadcast Wizard ──────────────────────────────────────────────────────
 
-type Step = 1 | 2 | 3 | 4 | 5;
+type Step = 1 | 2 | 3 | 4 | 5 | 6;
 
 const STEP_LABELS: Record<Step, string> = {
   1: "Select Page",
-  2: "Choose Template",
-  3: "Fill Fields",
-  4: "Recipients",
-  5: "Preview & Send",
+  2: "Audience",
+  3: "Eligibility",
+  4: "Template",
+  5: "Message",
+  6: "Launch",
 };
 
 function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const { pages } = useWorkspace();
   const [step, setStep] = useState<Step>(1);
 
+  // Step 1
   const [pageId, setPageId] = useState(pages[0]?.id ?? "");
 
-  // Templates
+  // Step 2: Audience
+  const [audienceMode, setAudienceMode] = useState<"all" | "specific">("all");
+  const [contacts, setContacts] = useState<ContactItem[]>([]);
+  const [contactsLoading, setContactsLoading] = useState(false);
+  const [contactSearch, setContactSearch] = useState("");
+  const [selectedContacts, setSelectedContacts] = useState<Set<string>>(new Set());
+
+  // Step 3: Eligibility
+  const [eligibility, setEligibility] = useState<EligibilityResult | null>(null);
+  const [eligibilityLoading, setEligibilityLoading] = useState(false);
+  const [eligibilityError, setEligibilityError] = useState("");
+
+  // Step 4: Template
   const [globalTemplates, setGlobalTemplates] = useState<GlobalTemplate[]>([]);
   const [userTemplates, setUserTemplates] = useState<UserTemplate[]>([]);
   const [tplLoading, setTplLoading] = useState(false);
   const [tplSearch, setTplSearch] = useState("");
   const [selectedTemplate, setSelectedTemplate] = useState<SelectedTemplate | null>(null);
 
-  const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
+  // Step 5: Fill Fields
   const [broadcastName, setBroadcastName] = useState("");
-  const [contacts, setContacts] = useState<ContactItem[]>([]);
-  const [contactsLoading, setContactsLoading] = useState(false);
-  const [contactSearch, setContactSearch] = useState("");
-  const [selectedContacts, setSelectedContacts] = useState<Set<string>>(new Set());
-  const [selectAll, setSelectAll] = useState(false);
+  const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
+
+  // Step 6: Launch
   const [schedule, setSchedule] = useState<"now" | "later">("now");
   const [schedDate, setSchedDate] = useState("");
   const [saving, setSaving] = useState(false);
@@ -661,22 +684,55 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
 
   const selectedPage = pages.find(p => p.id === pageId);
 
-  // Derived template data regardless of source
   const templateContent = selectedTemplate?.data.content ?? "";
   const templateAllFields = (selectedTemplate?.data.fields ?? []) as TemplateField[];
   const isUserTpl = selectedTemplate?.source === "user";
-
-  // For user templates: custom fields only (contact vars are auto)
   const customFields = isUserTpl
     ? templateAllFields.filter(f => !CONTACT_VARS.has(f.key))
     : templateAllFields;
   const contactVarsInTpl = isUserTpl
     ? templateAllFields.filter(f => CONTACT_VARS.has(f.key))
     : [];
+  const previewMessage = templateContent
+    ? renderPreview(templateContent, fieldValues, selectedPage?.name)
+    : "";
 
-  // Step 2: load templates
+  // Step 2: load contacts for specific mode
   useEffect(() => {
-    if (step !== 2) return;
+    if (step !== 2 || !pageId || audienceMode !== "specific") return;
+    setContactsLoading(true);
+    const params = new URLSearchParams({ pageId, limit: "100" });
+    if (contactSearch) params.set("search", contactSearch);
+    fetch(`/api/contacts?${params}`)
+      .then(r => r.ok ? r.json() : null)
+      .then((d: { contacts?: ContactItem[] } | null) => { if (d?.contacts) setContacts(d.contacts); })
+      .catch(() => {})
+      .finally(() => setContactsLoading(false));
+  }, [step, pageId, contactSearch, audienceMode]);
+
+  // Step 3: run eligibility check
+  useEffect(() => {
+    if (step !== 3) return;
+    setEligibilityLoading(true);
+    setEligibilityError("");
+    setEligibility(null);
+    const body: Record<string, unknown> = { pageId };
+    if (audienceMode === "specific") body.contactIds = [...selectedContacts];
+    fetch("/api/broadcasts/eligibility-check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+      .then(r => r.ok ? r.json() : r.json().then((d: { error?: string }) => Promise.reject(d.error ?? "Check failed")))
+      .then((d: EligibilityResult) => setEligibility(d))
+      .catch((e: unknown) => setEligibilityError(typeof e === "string" ? e : "Failed to run eligibility check"))
+      .finally(() => setEligibilityLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
+
+  // Step 4: load templates
+  useEffect(() => {
+    if (step !== 4) return;
     setTplLoading(true);
     const params = new URLSearchParams();
     if (tplSearch) params.set("search", tplSearch);
@@ -689,19 +745,6 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
     }).catch(() => {}).finally(() => setTplLoading(false));
   }, [step, tplSearch]);
 
-  // Step 4: load contacts
-  useEffect(() => {
-    if (step !== 4 || !pageId) return;
-    setContactsLoading(true);
-    const params = new URLSearchParams({ pageId, limit: "100" });
-    if (contactSearch) params.set("search", contactSearch);
-    fetch(`/api/contacts?${params}`)
-      .then(r => r.ok ? r.json() : null)
-      .then((d: { contacts?: ContactItem[] } | null) => { if (d?.contacts) setContacts(d.contacts); })
-      .catch(() => {})
-      .finally(() => setContactsLoading(false));
-  }, [step, pageId, contactSearch]);
-
   // Reset field values when template changes
   useEffect(() => {
     if (selectedTemplate) {
@@ -712,16 +755,6 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTemplate]);
 
-  const handleSelectAll = (checked: boolean) => {
-    setSelectAll(checked);
-    setSelectedContacts(checked ? new Set(contacts.map(c => c.id)) : new Set());
-  };
-
-  // Preview: contact vars shown as samples, custom vars filled from fieldValues
-  const previewMessage = templateContent
-    ? renderPreview(templateContent, fieldValues, selectedPage?.name)
-    : "";
-
   const fieldsValid = (): boolean => {
     for (const f of customFields) {
       if (f.required && !(fieldValues[f.key] ?? "").trim()) return false;
@@ -731,13 +764,14 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
 
   const canAdvance = (): boolean => {
     if (step === 1) return !!pageId;
-    if (step === 2) return !!selectedTemplate;
-    if (step === 3) return !!broadcastName.trim() && fieldsValid();
-    if (step === 4) return selectedContacts.size > 0;
+    if (step === 2) return audienceMode === "all" || selectedContacts.size > 0;
+    if (step === 3) return !eligibilityLoading && !!eligibility && eligibility.eligible > 0;
+    if (step === 4) return !!selectedTemplate;
+    if (step === 5) return !!broadcastName.trim() && fieldsValid();
     return !saving && !sending;
   };
 
-  const handleStep5 = async () => {
+  const createAndSend = async (mode: "send" | "schedule" | "draft") => {
     if (!selectedTemplate || !pageId) return;
     setSaving(true);
     setError("");
@@ -746,14 +780,18 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
         name: broadcastName.trim(),
         pageId,
         fieldValues,
-        contactIds: [...selectedContacts],
       };
+      if (audienceMode === "all") {
+        body.allPageContacts = true;
+      } else {
+        body.contactIds = [...selectedContacts];
+      }
       if (selectedTemplate.source === "global") {
         body.templateId = selectedTemplate.data.id;
       } else {
         body.messageTemplateId = selectedTemplate.data.id;
       }
-      if (schedule === "later" && schedDate) body.scheduledAt = schedDate;
+      if (mode === "schedule" && schedDate) body.scheduledAt = schedDate;
 
       const res = await fetch("/api/broadcasts", {
         method: "POST",
@@ -770,7 +808,13 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
       const { broadcast } = await res.json() as { broadcast: { id: string } };
       setDraftId(broadcast.id);
 
-      if (schedule === "later") {
+      if (mode === "draft") {
+        setSendResult({ sent: 0, failed: 0, ineligible: 0, status: "draft" });
+        onCreated();
+        return;
+      }
+
+      if (mode === "schedule") {
         setSendResult({ sent: 0, failed: 0, ineligible: 0, status: "scheduled" });
         onCreated();
         return;
@@ -803,8 +847,7 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
   };
 
   const goNext = () => {
-    if (step < 5) setStep(s => (s + 1) as Step);
-    else handleStep5();
+    if (step < 6) setStep(s => (s + 1) as Step);
   };
 
   const inp = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" };
@@ -821,23 +864,23 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
         <div className="flex items-center justify-between px-6 py-4 border-b shrink-0" style={{ borderColor: "rgba(255,255,255,0.07)" }}>
           <div>
             <h2 className="text-[15px] font-semibold" style={{ color: "#F5F7FA" }}>New Broadcast</h2>
-            {!sendResult && <p className="text-[11.5px] mt-0.5" style={{ color: "#8B95A7" }}>Step {step} of 5 — {STEP_LABELS[step]}</p>}
+            {!sendResult && <p className="text-[11.5px] mt-0.5" style={{ color: "#8B95A7" }}>Step {step} of 6 — {STEP_LABELS[step]}</p>}
           </div>
           {!isBusy && <button onClick={onClose}><X size={16} style={{ color: "#8B95A7" }} /></button>}
         </div>
 
         {/* Step indicator */}
         {!sendResult && (
-          <div className="flex items-center gap-1 px-6 py-3 shrink-0" style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
-            {([1, 2, 3, 4, 5] as Step[]).map((s, i) => (
-              <div key={s} className="flex items-center gap-1">
-                <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold" style={{
+          <div className="flex items-center px-6 py-3 shrink-0" style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+            {([1, 2, 3, 4, 5, 6] as Step[]).map((s, i) => (
+              <div key={s} className="flex items-center flex-1">
+                <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0" style={{
                   background: step > s ? "#10B981" : step === s ? "#6C63FF" : "rgba(255,255,255,0.06)",
                   color: step >= s ? "#fff" : "#8B95A7",
                 }}>
                   {step > s ? <Check size={10} /> : s}
                 </div>
-                {i < 4 && <div className="flex-1 h-px w-6" style={{ background: step > s ? "#10B981" : "rgba(255,255,255,0.07)" }} />}
+                {i < 5 && <div className="flex-1 h-px" style={{ background: step > s ? "#10B981" : "rgba(255,255,255,0.07)" }} />}
               </div>
             ))}
           </div>
@@ -847,13 +890,13 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
         {sendResult ? (
           <div className="flex flex-col items-center justify-center py-14 gap-4">
             <div className="w-14 h-14 rounded-full flex items-center justify-center"
-              style={{ background: sendResult.status === "completed" ? "rgba(16,185,129,0.15)" : sendResult.status === "scheduled" ? "rgba(245,158,11,0.1)" : "rgba(108,99,255,0.12)" }}>
+              style={{ background: sendResult.status === "completed" ? "rgba(16,185,129,0.15)" : sendResult.status === "draft" ? "rgba(139,149,167,0.1)" : "rgba(245,158,11,0.1)" }}>
               {sendResult.status === "completed" ? <Check size={24} style={{ color: "#10B981" }} />
-                : sendResult.status === "scheduled" ? <Circle size={22} style={{ color: "#F59E0B" }} />
-                : <Send size={22} style={{ color: "#8B85FF" }} />}
+                : sendResult.status === "draft" ? <FileText size={22} style={{ color: "#8B95A7" }} />
+                : <Circle size={22} style={{ color: "#F59E0B" }} />}
             </div>
             <div className="text-[16px] font-semibold" style={{ color: "#F5F7FA" }}>
-              {sendResult.status === "completed" ? "Broadcast sent!" : sendResult.status === "scheduled" ? "Scheduled!" : "Sending…"}
+              {sendResult.status === "completed" ? "Broadcast sent!" : sendResult.status === "draft" ? "Saved as draft" : "Scheduled!"}
             </div>
             {sendResult.status === "completed" && (
               <div className="flex items-center gap-4 text-[13px]">
@@ -862,13 +905,18 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
                 {(sendResult.failed - sendResult.ineligible) > 0 && <span style={{ color: "#EF4444" }}>{sendResult.failed - sendResult.ineligible} failed</span>}
               </div>
             )}
+            {sendResult.status === "draft" && (
+              <p className="text-[13px] text-center max-w-xs" style={{ color: "#8B95A7" }}>
+                Open it from the Broadcasts list to send when ready.
+              </p>
+            )}
             <button onClick={onClose} className="mt-1 px-5 py-2 rounded-xl text-[13px] font-semibold text-white" style={{ background: "#6C63FF" }}>Done</button>
           </div>
         ) : (
           <>
             <div className="px-6 py-5 flex flex-col gap-4 overflow-y-auto flex-1 min-h-0">
 
-              {/* Step 1: Page */}
+              {/* Step 1: Select Page */}
               {step === 1 && (
                 <div>
                   <p className="text-[11px] font-semibold uppercase tracking-wider mb-3" style={{ color: "#8B95A7" }}>Select Facebook Page</p>
@@ -890,8 +938,148 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
                 </div>
               )}
 
-              {/* Step 2: Template — global + user */}
+              {/* Step 2: Audience */}
               {step === 2 && (
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wider mb-3" style={{ color: "#8B95A7" }}>Select Audience</p>
+                  <div className="flex flex-col gap-2 mb-4">
+                    {(["all", "specific"] as const).map(mode => (
+                      <button key={mode} onClick={() => { setAudienceMode(mode); setSelectedContacts(new Set()); }}
+                        className="flex items-center gap-3 p-3.5 rounded-xl text-left transition-all"
+                        style={{ background: audienceMode === mode ? "rgba(108,99,255,0.1)" : "rgba(255,255,255,0.03)", border: `1px solid ${audienceMode === mode ? "rgba(108,99,255,0.3)" : "rgba(255,255,255,0.07)"}` }}>
+                        <div className="w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0"
+                          style={{ borderColor: audienceMode === mode ? "#6C63FF" : "rgba(255,255,255,0.2)" }}>
+                          {audienceMode === mode && <div className="w-2 h-2 rounded-full" style={{ background: "#6C63FF" }} />}
+                        </div>
+                        <div>
+                          <div className="text-[13px] font-medium" style={{ color: "#F5F7FA" }}>
+                            {mode === "all" ? "All page contacts" : "Specific contacts"}
+                          </div>
+                          <div className="text-[11.5px]" style={{ color: "#8B95A7" }}>
+                            {mode === "all" ? "Every contact on this page — eligibility checked in next step" : "Manually select which contacts to include"}
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+
+                  {audienceMode === "specific" && (
+                    <>
+                      <div className="relative mb-3">
+                        <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#8B95A7" }} />
+                        <input type="text" placeholder="Search contacts…" value={contactSearch}
+                          onChange={e => setContactSearch(e.target.value)}
+                          className="w-full pl-9 pr-3 py-2 rounded-lg text-[13px] outline-none" style={inp} />
+                      </div>
+                      {contactsLoading ? (
+                        <div className="flex flex-col gap-2">
+                          {[1, 2, 3, 4].map(i => <div key={i} className="h-11 rounded-xl animate-pulse" style={{ background: "rgba(255,255,255,0.04)" }} />)}
+                        </div>
+                      ) : contacts.length === 0 ? (
+                        <div className="py-8 text-center text-[13px]" style={{ color: "#8B95A7" }}>
+                          {contactSearch ? "No contacts match your search." : "No contacts found. Scan the page first."}
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-[11px]" style={{ color: "#8B95A7" }}>{contacts.length} contacts</span>
+                            <button onClick={() => setSelectedContacts(prev => prev.size === contacts.length ? new Set() : new Set(contacts.map(c => c.id)))}
+                              className="text-[11px]" style={{ color: "#6C63FF" }}>
+                              {selectedContacts.size === contacts.length ? "Deselect all" : "Select all"}
+                            </button>
+                          </div>
+                          <div className="flex flex-col gap-1 max-h-56 overflow-y-auto pr-1">
+                            {contacts.map(c => {
+                              const checked = selectedContacts.has(c.id);
+                              const ws = windowStatus(c);
+                              const dotColor = ws === "open" ? "#10B981" : ws === "closed" ? "#F59E0B" : "#8B95A7";
+                              return (
+                                <button key={c.id} onClick={() => setSelectedContacts(prev => {
+                                  const next = new Set(prev);
+                                  next.has(c.id) ? next.delete(c.id) : next.add(c.id);
+                                  return next;
+                                })}
+                                  className="flex items-center gap-3 p-2.5 rounded-lg text-left transition-all"
+                                  style={{ background: checked ? "rgba(108,99,255,0.08)" : "transparent", border: `1px solid ${checked ? "rgba(108,99,255,0.2)" : "transparent"}` }}>
+                                  <div className="w-5 h-5 rounded flex items-center justify-center shrink-0"
+                                    style={{ background: checked ? "#6C63FF" : "rgba(255,255,255,0.06)", border: checked ? "none" : "1px solid rgba(255,255,255,0.12)" }}>
+                                    {checked && <Check size={10} color="#fff" />}
+                                  </div>
+                                  <div className="w-2 h-2 rounded-full shrink-0" style={{ background: dotColor }}
+                                    title={ws === "open" ? "Window open" : ws === "closed" ? "Window closed (>24h)" : "Never messaged"} />
+                                  <div className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0" style={{ background: "#6C63FF" }}>
+                                    {contactDisplayName(c).charAt(0).toUpperCase()}
+                                  </div>
+                                  <span className="text-[12.5px]" style={{ color: "#F5F7FA" }}>{contactDisplayName(c)}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                          {selectedContacts.size > 0 && (
+                            <div className="mt-3 text-[12px]" style={{ color: "#6C63FF" }}>
+                              <Users size={11} className="inline mr-1" />{selectedContacts.size} contact{selectedContacts.size !== 1 ? "s" : ""} selected
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Step 3: Eligibility Check */}
+              {step === 3 && (
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wider mb-3" style={{ color: "#8B95A7" }}>Eligibility Check</p>
+                  <p className="text-[12.5px] mb-4" style={{ color: "#8B95A7" }}>
+                    Checking which contacts can receive a message right now based on the 24-hour Messenger window and subscription status.
+                  </p>
+                  {eligibilityLoading ? (
+                    <div className="flex items-center gap-3 py-8 justify-center">
+                      <Loader2 size={18} className="animate-spin" style={{ color: "#6C63FF" }} />
+                      <span className="text-[13px]" style={{ color: "#8B95A7" }}>Running eligibility check…</span>
+                    </div>
+                  ) : eligibilityError ? (
+                    <div className="p-3 rounded-xl flex items-start gap-2 text-[12.5px]"
+                      style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#EF4444" }}>
+                      <AlertCircle size={14} className="mt-0.5 shrink-0" /> {eligibilityError}
+                    </div>
+                  ) : eligibility ? (
+                    <div className="flex flex-col gap-3">
+                      <div className="grid grid-cols-2 gap-3">
+                        {[
+                          { label: "Total contacts", value: eligibility.total, color: "#F5F7FA", bg: "rgba(255,255,255,0.04)" },
+                          { label: "Eligible to receive", value: eligibility.eligible, color: "#10B981", bg: "rgba(16,185,129,0.08)" },
+                          { label: "Window closed (>24h)", value: eligibility.ineligible, color: "#F59E0B", bg: "rgba(245,158,11,0.08)" },
+                          { label: "Unsubscribed", value: eligibility.skipped, color: "#8B95A7", bg: "rgba(139,149,167,0.08)" },
+                        ].map(({ label, value, color, bg }) => (
+                          <div key={label} className="p-3 rounded-xl text-center" style={{ background: bg, border: "1px solid rgba(255,255,255,0.06)" }}>
+                            <div className="text-[22px] font-bold" style={{ color }}>{value.toLocaleString()}</div>
+                            <div className="text-[11px] mt-0.5" style={{ color: "#8B95A7" }}>{label}</div>
+                          </div>
+                        ))}
+                      </div>
+                      {eligibility.eligible === 0 ? (
+                        <div className="p-3 rounded-xl flex items-start gap-2 text-[12.5px]"
+                          style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#EF4444" }}>
+                          <AlertCircle size={14} className="mt-0.5 shrink-0" />
+                          No eligible recipients. No contacts have an open 24-hour Messenger window. Contacts must send a message to your Page first.
+                        </div>
+                      ) : (
+                        <div className="p-3 rounded-xl flex items-start gap-2 text-[12.5px]"
+                          style={{ background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.15)", color: "#10B981" }}>
+                          <Check size={14} className="mt-0.5 shrink-0" />
+                          Ready — {eligibility.eligible.toLocaleString()} eligible contact{eligibility.eligible !== 1 ? "s" : ""} will receive this broadcast.
+                          {eligibility.ineligible > 0 && ` ${eligibility.ineligible.toLocaleString()} will be automatically skipped (window closed).`}
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              )}
+
+              {/* Step 4: Choose Template */}
+              {step === 4 && (
                 <div>
                   <div className="relative mb-3">
                     <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#8B95A7" }} />
@@ -899,14 +1087,12 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
                       onChange={e => setTplSearch(e.target.value)}
                       className="w-full pl-9 pr-3 py-2 rounded-lg text-[13px] outline-none" style={inp} />
                   </div>
-
                   {tplLoading ? (
                     <div className="flex flex-col gap-2">
                       {[1, 2, 3].map(i => <div key={i} className="h-16 rounded-xl animate-pulse" style={{ background: "rgba(255,255,255,0.04)" }} />)}
                     </div>
                   ) : (
                     <>
-                      {/* My Templates */}
                       {userTemplates.length > 0 && (
                         <div className="mb-4">
                           <p className="text-[11px] font-semibold uppercase tracking-wider mb-2" style={{ color: "#8B95A7" }}>My Templates</p>
@@ -925,14 +1111,10 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
                                   <div className="flex items-center gap-2 flex-wrap">
                                     <span className="text-[13px] font-semibold" style={{ color: "#F5F7FA" }}>{t.name}</span>
                                     {t.category && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.06)", color: "#8B95A7" }}>{t.category}</span>}
-                                    {contactCount > 0 && (
-                                      <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(16,185,129,0.08)", color: "#10B981" }}>Personalized</span>
-                                    )}
+                                    {contactCount > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(16,185,129,0.08)", color: "#10B981" }}>Personalized</span>}
                                   </div>
                                   <p className="text-[11px] mt-0.5 truncate font-mono" style={{ color: "#8B95A7" }}>{t.content}</p>
-                                  {customCount > 0 && (
-                                    <p className="text-[10.5px] mt-0.5" style={{ color: "#6C63FF" }}>{customCount} custom field{customCount !== 1 ? "s" : ""} to fill</p>
-                                  )}
+                                  {customCount > 0 && <p className="text-[10.5px] mt-0.5" style={{ color: "#6C63FF" }}>{customCount} custom field{customCount !== 1 ? "s" : ""} to fill</p>}
                                 </div>
                                 {isSelected && <Check size={14} style={{ color: "#6C63FF" }} className="mt-1 shrink-0" />}
                               </button>
@@ -940,8 +1122,6 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
                           })}
                         </div>
                       )}
-
-                      {/* Admin Templates */}
                       {globalTemplates.length > 0 && (
                         <div>
                           <p className="text-[11px] font-semibold uppercase tracking-wider mb-2" style={{ color: "#8B95A7" }}>Admin Templates</p>
@@ -960,9 +1140,7 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
                                     {t.category && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.06)", color: "#8B95A7" }}>{t.category}</span>}
                                   </div>
                                   {t.description && <p className="text-[12px] mt-0.5 truncate" style={{ color: "#8B95A7" }}>{t.description}</p>}
-                                  {t.fields && t.fields.length > 0 && (
-                                    <p className="text-[11px] mt-1" style={{ color: "#6C63FF" }}>{t.fields.length} editable field{t.fields.length !== 1 ? "s" : ""}</p>
-                                  )}
+                                  {t.fields && t.fields.length > 0 && <p className="text-[11px] mt-1" style={{ color: "#6C63FF" }}>{t.fields.length} editable field{t.fields.length !== 1 ? "s" : ""}</p>}
                                 </div>
                                 {isSelected && <Check size={14} style={{ color: "#6C63FF" }} className="mt-1 shrink-0" />}
                               </button>
@@ -970,7 +1148,6 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
                           })}
                         </div>
                       )}
-
                       {userTemplates.length === 0 && globalTemplates.length === 0 && (
                         <div className="py-8 text-center text-[13px]" style={{ color: "#8B95A7" }}>
                           {tplSearch ? "No templates match your search." : "No templates yet. Create one in Templates, or ask your admin."}
@@ -981,17 +1158,16 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
                 </div>
               )}
 
-              {/* Step 3: Fill Fields */}
-              {step === 3 && selectedTemplate && (
+              {/* Step 5: Fill Fields & Preview */}
+              {step === 5 && selectedTemplate && (
                 <div>
                   <div>
                     <label className="text-[11px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: "#8B95A7" }}>Broadcast Name *</label>
                     <input value={broadcastName} onChange={e => setBroadcastName(e.target.value)}
-                      placeholder="e.g. August Appointment Reminders"
+                      placeholder="e.g. September Appointment Reminders"
                       className="w-full px-3 py-2.5 rounded-lg text-[13px] outline-none" style={inp} />
                   </div>
 
-                  {/* Contact vars badge for user templates */}
                   {isUserTpl && contactVarsInTpl.length > 0 && (
                     <div className="mt-4 p-3 rounded-xl" style={{ background: "rgba(16,185,129,0.05)", border: "1px solid rgba(16,185,129,0.15)" }}>
                       <div className="flex items-center gap-2 mb-1.5">
@@ -1008,7 +1184,6 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
                     </div>
                   )}
 
-                  {/* Custom fields */}
                   {customFields.length > 0 ? (
                     <div className="mt-4 flex flex-col gap-3">
                       <p className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "#8B95A7" }}>Fill in the editable fields</p>
@@ -1034,7 +1209,6 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
                     </div>
                   ) : null}
 
-                  {/* Live preview */}
                   <div className="mt-4">
                     <p className="text-[11px] font-semibold uppercase tracking-wider mb-2" style={{ color: "#8B95A7" }}>
                       {isUserTpl ? "Preview (sample contact data)" : "Live Preview"}
@@ -1052,69 +1226,8 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
                 </div>
               )}
 
-              {/* Step 4: Recipients */}
-              {step === 4 && (
-                <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "#8B95A7" }}>Select Recipients</p>
-                    {contacts.length > 0 && (
-                      <label className="flex items-center gap-2 text-[12px] cursor-pointer" style={{ color: "#8B95A7" }}>
-                        <input type="checkbox" checked={selectAll} onChange={e => handleSelectAll(e.target.checked)} />
-                        All ({contacts.length})
-                      </label>
-                    )}
-                  </div>
-                  <div className="relative mb-3">
-                    <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#8B95A7" }} />
-                    <input type="text" placeholder="Search contacts…" value={contactSearch}
-                      onChange={e => setContactSearch(e.target.value)}
-                      className="w-full pl-9 pr-3 py-2 rounded-lg text-[13px] outline-none" style={inp} />
-                  </div>
-                  {contactsLoading ? (
-                    <div className="flex flex-col gap-2">
-                      {[1, 2, 3, 4].map(i => <div key={i} className="h-11 rounded-xl animate-pulse" style={{ background: "rgba(255,255,255,0.04)" }} />)}
-                    </div>
-                  ) : contacts.length === 0 ? (
-                    <div className="py-8 text-center text-[13px]" style={{ color: "#8B95A7" }}>
-                      {contactSearch ? "No contacts match your search." : "No contacts found. Scan the page first."}
-                    </div>
-                  ) : (
-                    <div className="flex flex-col gap-1 max-h-60 overflow-y-auto pr-1">
-                      {contacts.map(c => {
-                        const checked = selectedContacts.has(c.id);
-                        return (
-                          <button key={c.id} onClick={() => {
-                            setSelectedContacts(prev => {
-                              const next = new Set(prev);
-                              next.has(c.id) ? next.delete(c.id) : next.add(c.id);
-                              return next;
-                            });
-                          }}
-                            className="flex items-center gap-3 p-2.5 rounded-lg text-left transition-all"
-                            style={{ background: checked ? "rgba(108,99,255,0.08)" : "transparent", border: `1px solid ${checked ? "rgba(108,99,255,0.2)" : "transparent"}` }}>
-                            <div className="w-5 h-5 rounded flex items-center justify-center shrink-0"
-                              style={{ background: checked ? "#6C63FF" : "rgba(255,255,255,0.06)", border: checked ? "none" : "1px solid rgba(255,255,255,0.12)" }}>
-                              {checked && <Check size={10} color="#fff" />}
-                            </div>
-                            <div className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0" style={{ background: "#6C63FF" }}>
-                              {contactDisplayName(c).charAt(0).toUpperCase()}
-                            </div>
-                            <span className="text-[12.5px]" style={{ color: "#F5F7FA" }}>{contactDisplayName(c)}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                  {selectedContacts.size > 0 && (
-                    <div className="mt-3 text-[12px]" style={{ color: "#6C63FF" }}>
-                      <Users size={11} className="inline mr-1" />{selectedContacts.size} recipient{selectedContacts.size !== 1 ? "s" : ""} selected
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Step 5: Preview & Send */}
-              {step === 5 && selectedTemplate && (
+              {/* Step 6: Launch */}
+              {step === 6 && selectedTemplate && (
                 <div>
                   <div className="p-4 rounded-xl mb-4" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)" }}>
                     <div className="text-[11px] font-semibold uppercase tracking-wider mb-3" style={{ color: "#8B95A7" }}>Summary</div>
@@ -1127,7 +1240,16 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
                           {isUserTpl && <span className="text-[9.5px] px-1.5 py-0.5 rounded" style={{ background: "rgba(16,185,129,0.1)", color: "#10B981" }}>Personalized</span>}
                         </span>
                       </div>
-                      <div className="flex justify-between"><span style={{ color: "#8B95A7" }}>Recipients</span><span style={{ color: "#F5F7FA" }}>{selectedContacts.size.toLocaleString()}</span></div>
+                      <div className="flex justify-between"><span style={{ color: "#8B95A7" }}>Audience</span>
+                        <span style={{ color: "#F5F7FA" }}>
+                          {audienceMode === "all" ? "All page contacts" : `${selectedContacts.size} selected contacts`}
+                        </span>
+                      </div>
+                      {eligibility && (
+                        <div className="flex justify-between"><span style={{ color: "#8B95A7" }}>Eligible</span>
+                          <span style={{ color: "#10B981" }}>{eligibility.eligible.toLocaleString()} of {eligibility.total.toLocaleString()}</span>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -1141,7 +1263,7 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
                     </div>
                     {isUserTpl && (
                       <p className="text-[10.5px] mt-1.5" style={{ color: "#8B95A7" }}>
-                        Each recipient will receive a personalized version with their own name and contact data.
+                        Each recipient will receive a personalized version.
                       </p>
                     )}
                   </div>
@@ -1152,7 +1274,10 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
                       {(["now", "later"] as const).map(s => (
                         <button key={s} onClick={() => setSchedule(s)} className="flex items-center gap-3 p-3 rounded-xl text-left"
                           style={{ background: schedule === s ? "rgba(108,99,255,0.1)" : "rgba(255,255,255,0.03)", border: `1px solid ${schedule === s ? "rgba(108,99,255,0.3)" : "rgba(255,255,255,0.07)"}` }}>
-                          <Circle size={8} fill={schedule === s ? "#6C63FF" : "transparent"} style={{ color: schedule === s ? "#6C63FF" : "#8B95A7" }} />
+                          <div className="w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0"
+                            style={{ borderColor: schedule === s ? "#6C63FF" : "rgba(255,255,255,0.2)" }}>
+                            {schedule === s && <div className="w-2 h-2 rounded-full" style={{ background: "#6C63FF" }} />}
+                          </div>
                           <span className="text-[13px] font-medium" style={{ color: "#F5F7FA" }}>
                             {s === "now" ? "Send Now" : "Schedule for later"}
                           </span>
@@ -1173,7 +1298,7 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
                   )}
                   {draftId && error && (
                     <p className="text-[11.5px] mt-2" style={{ color: "#8B95A7" }}>
-                      Your broadcast was saved as a draft. You can retry sending from the broadcasts list.
+                      Your broadcast was saved. You can retry sending from the broadcasts list.
                     </p>
                   )}
                 </div>
@@ -1181,23 +1306,52 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
             </div>
 
             {/* Footer */}
-            <div className="flex gap-3 px-6 py-4 shrink-0 border-t" style={{ borderColor: "rgba(255,255,255,0.07)" }}>
-              {step > 1 && !isBusy && (
-                <button onClick={() => setStep(s => (s - 1) as Step)}
-                  className="flex-1 py-2.5 rounded-xl text-[13px] font-medium"
-                  style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#8B95A7" }}>
-                  Back
-                </button>
+            <div className="shrink-0 border-t" style={{ borderColor: "rgba(255,255,255,0.07)" }}>
+              {step === 6 ? (
+                <div className="flex flex-col gap-2 px-6 py-4">
+                  {!isBusy && (
+                    <div className="flex gap-3">
+                      <button onClick={() => setStep(5)}
+                        className="flex-1 py-2.5 rounded-xl text-[13px] font-medium"
+                        style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#8B95A7" }}>
+                        Back
+                      </button>
+                      <button onClick={() => createAndSend("draft")}
+                        className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-[13px] font-medium"
+                        style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#8B95A7" }}>
+                        <FileText size={13} /> Save as Draft
+                      </button>
+                    </div>
+                  )}
+                  <button
+                    onClick={() => createAndSend(schedule === "now" ? "send" : "schedule")}
+                    disabled={isBusy || (schedule === "later" && !schedDate)}
+                    className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold text-white transition-all"
+                    style={{ background: "#6C63FF", opacity: (isBusy || (schedule === "later" && !schedDate)) ? 0.5 : 1 }}>
+                    {sending ? <><Loader2 size={14} className="animate-spin" /> Sending to {eligibility?.eligible ?? 0}…</>
+                      : saving ? <><Loader2 size={14} className="animate-spin" /> Saving…</>
+                      : schedule === "now" ? <><Send size={14} /> Send Now to {eligibility?.eligible ?? 0} contacts</>
+                      : <><Circle size={14} /> Schedule Broadcast</>}
+                  </button>
+                </div>
+              ) : (
+                <div className="flex gap-3 px-6 py-4">
+                  {step > 1 && !isBusy && (
+                    <button onClick={() => setStep(s => (s - 1) as Step)}
+                      className="flex-1 py-2.5 rounded-xl text-[13px] font-medium"
+                      style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#8B95A7" }}>
+                      Back
+                    </button>
+                  )}
+                  <button onClick={goNext} disabled={!canAdvance()}
+                    className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold text-white transition-all"
+                    style={{ background: "#6C63FF", opacity: canAdvance() ? 1 : 0.4 }}>
+                    {step === 3 && eligibilityLoading ? <><Loader2 size={14} className="animate-spin" /> Checking…</>
+                      : step === 3 && eligibility?.eligible === 0 ? "No eligible recipients"
+                      : "Continue"}
+                  </button>
+                </div>
               )}
-              <button onClick={goNext} disabled={!canAdvance()}
-                className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold text-white transition-all"
-                style={{ background: "#6C63FF", opacity: canAdvance() ? 1 : 0.4 }}>
-                {sending ? <><Loader2 size={14} className="animate-spin" /> Sending…</>
-                  : saving ? <><Loader2 size={14} className="animate-spin" /> Saving…</>
-                  : step < 5 ? "Continue"
-                  : schedule === "now" ? <><Send size={14} /> Send Now</>
-                  : "Schedule Broadcast"}
-              </button>
             </div>
           </>
         )}
@@ -1208,24 +1362,25 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
+type TabKey = "all" | "sending" | "scheduled" | "completed" | "failed" | "draft";
+
+const TABS: Array<{ key: TabKey; label: string }> = [
+  { key: "all", label: "All" },
+  { key: "sending", label: "Sending" },
+  { key: "scheduled", label: "Scheduled" },
+  { key: "completed", label: "Completed" },
+  { key: "failed", label: "Failed" },
+  { key: "draft", label: "Drafts" },
+];
+
 export default function BroadcastsPage() {
   const { pages } = useWorkspace();
   const router = useRouter();
+  const [activeTab, setActiveTab] = useState<TabKey>("all");
   const [broadcasts, setBroadcasts] = useState<BroadcastItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [showWizard, setShowWizard] = useState(false);
   const [selectedDraft, setSelectedDraft] = useState<BroadcastItem | null>(null);
-
-  const load = () => {
-    setLoading(true);
-    fetch("/api/broadcasts?limit=50")
-      .then(r => r.ok ? r.json() : null)
-      .then((d: { broadcasts?: BroadcastItem[] } | null) => { if (d?.broadcasts) setBroadcasts(d.broadcasts); })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(() => { load(); }, []);
 
   const handleDraftSent = (updated: BroadcastItem) => {
     setBroadcasts(prev => prev.map(b => b.id === updated.id ? { ...b, ...updated } : b));
@@ -1233,6 +1388,28 @@ export default function BroadcastsPage() {
 
   const fmt = (iso: string | null) =>
     iso ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—";
+
+  useEffect(() => {
+    setLoading(true);
+    const params = new URLSearchParams({ limit: "50" });
+    if (activeTab !== "all") params.set("status", activeTab);
+    fetch(`/api/broadcasts?${params}`)
+      .then(r => r.ok ? r.json() : null)
+      .then((d: { broadcasts?: BroadcastItem[] } | null) => { if (d?.broadcasts) setBroadcasts(d.broadcasts ?? []); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [activeTab]);
+
+  const reload = () => {
+    setLoading(true);
+    const params = new URLSearchParams({ limit: "50" });
+    if (activeTab !== "all") params.set("status", activeTab);
+    fetch(`/api/broadcasts?${params}`)
+      .then(r => r.ok ? r.json() : null)
+      .then((d: { broadcasts?: BroadcastItem[] } | null) => { if (d?.broadcasts) setBroadcasts(d.broadcasts ?? []); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  };
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto">
@@ -1248,6 +1425,21 @@ export default function BroadcastsPage() {
         </button>
       </div>
 
+      {/* Tabs */}
+      <div className="flex items-center gap-1 mb-4 overflow-x-auto">
+        {TABS.map(tab => (
+          <button key={tab.key} onClick={() => setActiveTab(tab.key)}
+            className="px-3.5 py-1.5 rounded-lg text-[12.5px] font-medium shrink-0 transition-all"
+            style={{
+              background: activeTab === tab.key ? "rgba(108,99,255,0.12)" : "transparent",
+              color: activeTab === tab.key ? "#8B85FF" : "#8B95A7",
+              border: `1px solid ${activeTab === tab.key ? "rgba(108,99,255,0.25)" : "transparent"}`,
+            }}>
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
       {loading ? (
         <div className="flex flex-col gap-3">
           {Array.from({ length: 3 }).map((_, i) => (
@@ -1257,92 +1449,102 @@ export default function BroadcastsPage() {
       ) : broadcasts.length === 0 ? (
         <div className="py-20 flex flex-col items-center justify-center gap-3">
           <Radio size={36} style={{ color: "#8B95A7", opacity: 0.25 }} />
-          <div className="text-[15px] font-semibold" style={{ color: "#F5F7FA" }}>No broadcasts yet</div>
-          <div className="text-[13px] text-center max-w-xs" style={{ color: "#8B95A7" }}>
-            Create your first broadcast using your message templates or an admin-approved template.
+          <div className="text-[15px] font-semibold" style={{ color: "#F5F7FA" }}>
+            {activeTab === "all" ? "No broadcasts yet" : `No ${activeTab} broadcasts`}
           </div>
-          <button onClick={() => setShowWizard(true)}
-            className="mt-2 flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-semibold text-white"
-            style={{ background: "#6C63FF" }}>
-            <Plus size={14} /> Create Broadcast
-          </button>
+          <div className="text-[13px] text-center max-w-xs" style={{ color: "#8B95A7" }}>
+            {activeTab === "all"
+              ? "Create your first broadcast using your message templates or an admin-approved template."
+              : `No broadcasts with status "${activeTab}" found.`}
+          </div>
+          {activeTab === "all" && (
+            <button onClick={() => setShowWizard(true)}
+              className="mt-2 flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-semibold text-white"
+              style={{ background: "#6C63FF" }}>
+              <Plus size={14} /> Create Broadcast
+            </button>
+          )}
         </div>
       ) : (
         <div className="rounded-xl overflow-hidden" style={{ border: "1px solid rgba(255,255,255,0.07)" }}>
-          <table className="w-full text-[12.5px]">
-            <thead>
-              <tr style={{ background: "rgba(255,255,255,0.03)", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
-                {["Name", "Page", "Template", "Status", "Sent", "Created", ""].map(h => (
-                  <th key={h} className="px-4 py-3 text-left font-semibold" style={{ color: "#8B95A7" }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {broadcasts.map((b, i) => {
-                const sc = STATUS_COLORS[b.status] ?? STATUS_COLORS.draft;
-                const isDraft = b.status === "draft";
-                const isClickable = true; // all rows are now clickable
-                const handleClick = () => {
-                  if (isDraft) setSelectedDraft(b);
-                  else router.push(`/app/broadcasts/${b.id}`);
-                };
-                return (
-                  <tr key={b.id}
-                    onClick={handleClick}
-                    className="cursor-pointer"
-                    style={{
-                      background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)",
-                      borderBottom: "1px solid rgba(255,255,255,0.04)",
-                      transition: "background 0.1s",
-                    }}
-                    onMouseEnter={e => { (e.currentTarget as HTMLTableRowElement).style.background = "rgba(108,99,255,0.05)"; }}
-                    onMouseLeave={e => { (e.currentTarget as HTMLTableRowElement).style.background = i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)"; }}
-                  >
-                    <td className="px-4 py-3" style={{ color: "#F5F7FA" }}>
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">{b.name}</span>
-                        {isDraft && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded font-medium flex items-center gap-1"
-                            style={{ background: "rgba(108,99,255,0.12)", color: "#8B85FF" }}>
-                            <Send size={8} /> Send
-                          </span>
-                        )}
-                        {b.messageTemplateId && (
-                          <span className="text-[9.5px] px-1.5 py-0.5 rounded" style={{ background: "rgba(16,185,129,0.08)", color: "#10B981" }}>
-                            Personalized
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3" style={{ color: "#8B95A7" }}>{pages.find(p => p.id === b.pageId)?.name ?? "—"}</td>
-                    <td className="px-4 py-3" style={{ color: "#8B95A7" }}>{b.templateName ?? "—"}</td>
-                    <td className="px-4 py-3">
-                      <span className="px-2 py-0.5 rounded-full text-[10.5px] font-semibold capitalize"
-                        style={{ background: sc.bg, color: sc.color }}>{b.status}</span>
-                    </td>
-                    <td className="px-4 py-3" style={{ color: "#8B95A7" }}>
-                      {b.status === "completed"
-                        ? `${(b.sent ?? 0).toLocaleString()}${b.failed ? ` / ${b.failed} failed` : ""}`
-                        : (b.totalRecipients ?? b._count?.recipients ?? 0).toLocaleString()}
-                    </td>
-                    <td className="px-4 py-3" style={{ color: "#8B95A7" }}>{fmt(b.createdAt)}</td>
-                    <td className="px-4 py-3">
-                      {!isDraft && (
-                        <ExternalLink size={13} style={{ color: "#8B95A7", opacity: 0.5 }} />
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <div className="overflow-x-auto">
+            <table className="w-full text-[12.5px]">
+              <thead>
+                <tr style={{ background: "rgba(255,255,255,0.03)", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
+                  {["Name", "Page", "Template", "Status", "Total", "Sent", "Ineligible", "Skipped", "Created", ""].map(h => (
+                    <th key={h} className="px-4 py-3 text-left font-semibold whitespace-nowrap" style={{ color: "#8B95A7" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {broadcasts.map((b, i) => {
+                  const sc = STATUS_COLORS[b.status] ?? STATUS_COLORS.draft;
+                  const isDraft = b.status === "draft";
+                  const handleClick = () => {
+                    if (isDraft) setSelectedDraft(b);
+                    else router.push(`/app/broadcasts/${b.id}`);
+                  };
+                  return (
+                    <tr key={b.id}
+                      onClick={handleClick}
+                      className="cursor-pointer"
+                      style={{
+                        background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)",
+                        borderBottom: "1px solid rgba(255,255,255,0.04)",
+                        transition: "background 0.1s",
+                      }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLTableRowElement).style.background = "rgba(108,99,255,0.05)"; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLTableRowElement).style.background = i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)"; }}
+                    >
+                      <td className="px-4 py-3" style={{ color: "#F5F7FA" }}>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium whitespace-nowrap">{b.name}</span>
+                          {isDraft && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded font-medium flex items-center gap-1"
+                              style={{ background: "rgba(108,99,255,0.12)", color: "#8B85FF" }}>
+                              <Send size={8} /> Send
+                            </span>
+                          )}
+                          {b.messageTemplateId && (
+                            <span className="text-[9.5px] px-1.5 py-0.5 rounded" style={{ background: "rgba(16,185,129,0.08)", color: "#10B981" }}>P</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap" style={{ color: "#8B95A7" }}>{pages.find(p => p.id === b.pageId)?.name ?? "—"}</td>
+                      <td className="px-4 py-3 whitespace-nowrap" style={{ color: "#8B95A7" }}>{b.templateName ?? "—"}</td>
+                      <td className="px-4 py-3">
+                        <span className="px-2 py-0.5 rounded-full text-[10.5px] font-semibold capitalize whitespace-nowrap"
+                          style={{ background: sc.bg, color: sc.color }}>{b.status}</span>
+                      </td>
+                      <td className="px-4 py-3 text-right" style={{ color: "#8B95A7" }}>
+                        {(b.totalRecipients ?? b._count?.recipients ?? 0).toLocaleString()}
+                      </td>
+                      <td className="px-4 py-3 text-right" style={{ color: b.status === "completed" ? "#10B981" : "#8B95A7" }}>
+                        {b.status === "completed" ? (b.sent ?? 0).toLocaleString() : "—"}
+                      </td>
+                      <td className="px-4 py-3 text-right" style={{ color: "#F59E0B" }}>
+                        {b.status === "completed" && (b.ineligibleCount ?? 0) > 0 ? (b.ineligibleCount ?? 0).toLocaleString() : "—"}
+                      </td>
+                      <td className="px-4 py-3 text-right" style={{ color: "#8B95A7" }}>
+                        {b.status === "completed" && (b.skippedCount ?? 0) > 0 ? (b.skippedCount ?? 0).toLocaleString() : "—"}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap" style={{ color: "#8B95A7" }}>{fmt(b.createdAt)}</td>
+                      <td className="px-4 py-3">
+                        {!isDraft && <ExternalLink size={13} style={{ color: "#8B95A7", opacity: 0.5 }} />}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
           <p className="px-4 py-2 text-[11px]" style={{ color: "rgba(139,149,167,0.5)" }}>
             Click a <span style={{ color: "#8B85FF" }}>draft</span> row to open and send · Click any other row to view details
           </p>
         </div>
       )}
 
-      {showWizard && <BroadcastWizard onClose={() => setShowWizard(false)} onCreated={() => { load(); setShowWizard(false); }} />}
+      {showWizard && <BroadcastWizard onClose={() => setShowWizard(false)} onCreated={() => { reload(); setShowWizard(false); }} />}
       {selectedDraft && (
         <DraftDetailModal
           broadcast={selectedDraft}

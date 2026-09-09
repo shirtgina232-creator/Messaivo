@@ -58,7 +58,7 @@ export async function POST(req: Request) {
       return badRequest("Invalid JSON body");
     }
 
-    const { name, message, pageId, templateId, messageTemplateId, fieldValues, scheduledAt, contactIds } = body as Record<string, unknown>;
+    const { name, message, pageId, templateId, messageTemplateId, fieldValues, scheduledAt, contactIds, allPageContacts } = body as Record<string, unknown>;
 
     if (!name || typeof name !== "string" || !name.trim()) return badRequest("name is required");
 
@@ -167,9 +167,15 @@ export async function POST(req: Request) {
       return badRequest("Either messageTemplateId, templateId, or message is required");
     }
 
-    // Validate contactIds belong to this workspace before creating recipients
+    // Resolve recipient contact IDs — either all page contacts or an explicit list
     const validContactIds: string[] = [];
-    if (Array.isArray(contactIds) && contactIds.length > 0) {
+    if (allPageContacts === true && typeof pageId === "string") {
+      const pageContacts = await prisma.contact.findMany({
+        where: { pageId: pageId as string, workspaceId: ws.id },
+        select: { id: true },
+      });
+      pageContacts.forEach(c => validContactIds.push(c.id));
+    } else if (Array.isArray(contactIds) && contactIds.length > 0) {
       const ids = (contactIds as unknown[]).filter((x): x is string => typeof x === "string");
       if (ids.length > 0) {
         const found = await prisma.contact.findMany({
