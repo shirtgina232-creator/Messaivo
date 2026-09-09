@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Plus, Radio, X, Check, AlertCircle, Search, Circle, FileText, Users, Send, Loader2 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Plus, Radio, X, Check, AlertCircle, Search, Circle, FileText, Users, Send, Loader2, ExternalLink } from "lucide-react";
 import { useWorkspace } from "@/lib/workspace-context";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -1209,6 +1210,7 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
 
 export default function BroadcastsPage() {
   const { pages } = useWorkspace();
+  const router = useRouter();
   const [broadcasts, setBroadcasts] = useState<BroadcastItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [showWizard, setShowWizard] = useState(false);
@@ -1270,7 +1272,7 @@ export default function BroadcastsPage() {
           <table className="w-full text-[12.5px]">
             <thead>
               <tr style={{ background: "rgba(255,255,255,0.03)", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
-                {["Name", "Page", "Template", "Status", "Sent", "Created"].map(h => (
+                {["Name", "Page", "Template", "Status", "Sent", "Created", ""].map(h => (
                   <th key={h} className="px-4 py-3 text-left font-semibold" style={{ color: "#8B95A7" }}>{h}</th>
                 ))}
               </tr>
@@ -1279,17 +1281,22 @@ export default function BroadcastsPage() {
               {broadcasts.map((b, i) => {
                 const sc = STATUS_COLORS[b.status] ?? STATUS_COLORS.draft;
                 const isDraft = b.status === "draft";
+                const isClickable = true; // all rows are now clickable
+                const handleClick = () => {
+                  if (isDraft) setSelectedDraft(b);
+                  else router.push(`/app/broadcasts/${b.id}`);
+                };
                 return (
                   <tr key={b.id}
-                    onClick={isDraft ? () => setSelectedDraft(b) : undefined}
-                    className={isDraft ? "cursor-pointer" : ""}
+                    onClick={handleClick}
+                    className="cursor-pointer"
                     style={{
                       background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)",
                       borderBottom: "1px solid rgba(255,255,255,0.04)",
                       transition: "background 0.1s",
                     }}
-                    onMouseEnter={isDraft ? e => { (e.currentTarget as HTMLTableRowElement).style.background = "rgba(108,99,255,0.05)"; } : undefined}
-                    onMouseLeave={isDraft ? e => { (e.currentTarget as HTMLTableRowElement).style.background = i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)"; } : undefined}
+                    onMouseEnter={e => { (e.currentTarget as HTMLTableRowElement).style.background = "rgba(108,99,255,0.05)"; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLTableRowElement).style.background = i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)"; }}
                   >
                     <td className="px-4 py-3" style={{ color: "#F5F7FA" }}>
                       <div className="flex items-center gap-2">
@@ -1319,13 +1326,18 @@ export default function BroadcastsPage() {
                         : (b.totalRecipients ?? b._count?.recipients ?? 0).toLocaleString()}
                     </td>
                     <td className="px-4 py-3" style={{ color: "#8B95A7" }}>{fmt(b.createdAt)}</td>
+                    <td className="px-4 py-3">
+                      {!isDraft && (
+                        <ExternalLink size={13} style={{ color: "#8B95A7", opacity: 0.5 }} />
+                      )}
+                    </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
           <p className="px-4 py-2 text-[11px]" style={{ color: "rgba(139,149,167,0.5)" }}>
-            Click a <span style={{ color: "#8B85FF" }}>draft</span> row to open it and send.
+            Click a <span style={{ color: "#8B85FF" }}>draft</span> row to open and send · Click any other row to view details
           </p>
         </div>
       )}

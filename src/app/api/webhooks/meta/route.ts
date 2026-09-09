@@ -218,18 +218,60 @@ async function handleMessagingEvent(event: MetaMessagingEvent): Promise<void> {
     const pageAndConv = await resolvePageConversation(recipient.id, sender.id);
     if (!pageAndConv) return;
 
+    const deliveredAt = new Date();
+    const watermarkDate = new Date(delivery.watermark);
+
+    // Mark conversation messages delivered
     await prisma.message.updateMany({
       where: {
         conversationId: pageAndConv.conversationId,
         direction:      "outbound",
         status:         "sent",
-        sentAt:         { lte: new Date(delivery.watermark) },
+        sentAt:         { lte: watermarkDate },
       },
-      data: {
-        status:      "delivered",
-        deliveredAt: new Date(),
-      },
+      data: { status: "delivered", deliveredAt },
     });
+
+    // Aggregate to broadcast recipients — find metaMessageIds that were just delivered
+    try {
+      const deliveredMessages = await prisma.message.findMany({
+        where: {
+          conversationId: pageAndConv.conversationId,
+          direction:      "outbound",
+          metaMessageId:  { not: null },
+          sentAt:         { lte: watermarkDate },
+          deliveredAt:    { not: null },
+        },
+        select: { metaMessageId: true },
+      });
+      const mids = deliveredMessages.map(m => m.metaMessageId).filter(Boolean) as string[];
+      if (mids.length > 0) {
+        const updated = await prisma.broadcastRecipient.updateMany({
+          where: { metaMessageId: { in: mids }, status: "sent" },
+          data: { status: "delivered", deliveredAt },
+        });
+        if (updated.count > 0) {
+          const affected = await prisma.broadcastRecipient.findMany({
+            where: { metaMessageId: { in: mids } },
+            select: { broadcastId: true },
+            distinct: ["broadcastId"],
+          });
+          for (const { broadcastId } of affected) {
+            const count = await prisma.broadcastRecipient.count({
+              where: { broadcastId, metaMessageId: { in: mids }, status: "delivered" },
+            });
+            if (count > 0) {
+              await prisma.broadcast.update({
+                where: { id: broadcastId },
+                data: { delivered: { increment: count } },
+              });
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error("[Meta webhook] delivery broadcast aggregation error:", err);
+    }
     return;
   }
 
@@ -239,17 +281,17 @@ async function handleMessagingEvent(event: MetaMessagingEvent): Promise<void> {
     const pageAndConv = await resolvePageConversation(recipient.id, sender.id);
     if (!pageAndConv) return;
 
+    const readAt = new Date();
+    const watermarkDate = new Date(read.watermark);
+
     await prisma.message.updateMany({
       where: {
         conversationId: pageAndConv.conversationId,
         direction:      "outbound",
         status:         { in: ["sent", "delivered"] },
-        sentAt:         { lte: new Date(read.watermark) },
+        sentAt:         { lte: watermarkDate },
       },
-      data: {
-        status: "read",
-        readAt: new Date(),
-      },
+      data: { status: "read", readAt },
     });
 
     // Clear unread count on conversation when the user reads our messages
@@ -257,6 +299,47 @@ async function handleMessagingEvent(event: MetaMessagingEvent): Promise<void> {
       where: { id: pageAndConv.conversationId },
       data: { unreadCount: 0 },
     });
+
+    // Aggregate to broadcast recipients
+    try {
+      const readMessages = await prisma.message.findMany({
+        where: {
+          conversationId: pageAndConv.conversationId,
+          direction:      "outbound",
+          metaMessageId:  { not: null },
+          sentAt:         { lte: watermarkDate },
+          readAt:         { not: null },
+        },
+        select: { metaMessageId: true },
+      });
+      const mids = readMessages.map(m => m.metaMessageId).filter(Boolean) as string[];
+      if (mids.length > 0) {
+        const updated = await prisma.broadcastRecipient.updateMany({
+          where: { metaMessageId: { in: mids }, status: { in: ["sent", "delivered"] } },
+          data: { status: "read", readAt },
+        });
+        if (updated.count > 0) {
+          const affected = await prisma.broadcastRecipient.findMany({
+            where: { metaMessageId: { in: mids } },
+            select: { broadcastId: true },
+            distinct: ["broadcastId"],
+          });
+          for (const { broadcastId } of affected) {
+            const count = await prisma.broadcastRecipient.count({
+              where: { broadcastId, metaMessageId: { in: mids }, status: "read" },
+            });
+            if (count > 0) {
+              await prisma.broadcast.update({
+                where: { id: broadcastId },
+                data: { read: { increment: count } },
+              });
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error("[Meta webhook] read broadcast aggregation error:", err);
+    }
     return;
   }
 }

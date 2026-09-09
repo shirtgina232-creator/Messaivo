@@ -26,18 +26,19 @@ const NAV = [
   {
     section: "MAIN",
     items: [
-      { label: "Dashboard",  icon: LayoutDashboard, href: "/app"             },
-      { label: "Audience",   icon: Users,            href: "/app/audience"   },
-      { label: "Inbox",      icon: MessageSquare,    href: "/app/inbox" },
-      { label: "Broadcasts", icon: Radio,            href: "/app/broadcasts" },
+      { label: "Dashboard",    icon: LayoutDashboard,  href: "/app"             },
+      { label: "Inbox",        icon: MessageSquare,    href: "/app/inbox"       },
+      { label: "Audience",     icon: Users,            href: "/app/audience"    },
+      { label: "Broadcasts",   icon: Radio,            href: "/app/broadcasts"  },
     ],
   },
   {
     section: "MANAGE",
     items: [
-      { label: "Pages",     icon: Link2,    href: "/app/pages"     },
-      { label: "Templates", icon: FileText, href: "/app/templates" },
-      { label: "Groups",    icon: Layers,   href: "/app/groups"    },
+      { label: "Connections",   icon: Link2,           href: "/app/pages"       },
+      { label: "Groups",        icon: Layers,          href: "/app/groups"      },
+      { label: "Templates",     icon: FileText,        href: "/app/templates"   },
+      { label: "Saved Replies", icon: MessageCircleMore, href: "/app/templates" },
     ],
   },
   {
@@ -272,11 +273,18 @@ function SupportModal({ open, onClose }: { open: boolean; onClose: () => void })
 
 const PAGE_TITLES: Record<string, string> = {
   "/app": "Dashboard", "/app/audience": "Audience", "/app/inbox": "Inbox",
-  "/app/broadcasts": "Broadcasts", "/app/pages": "Pages",
+  "/app/broadcasts": "Broadcasts", "/app/pages": "Connections",
   "/app/templates": "Templates", "/app/groups": "Groups",
   "/app/analytics": "Analytics", "/app/credits": "Credits",
   "/app/settings": "Settings", "/app/billing": "Billing",
 };
+
+function resolvePageTitle(pathname: string): string {
+  if (PAGE_TITLES[pathname]) return PAGE_TITLES[pathname];
+  if (pathname.startsWith("/app/broadcasts/")) return "Broadcast Details";
+  if (pathname.startsWith("/app/billing/")) return "Billing";
+  return "Messaivo";
+}
 
 function Topbar({ onSearchOpen, notifOpen, setNotifOpen }: {
   onSearchOpen: () => void;
@@ -285,7 +293,7 @@ function Topbar({ onSearchOpen, notifOpen, setNotifOpen }: {
 }) {
   const { setMobileOpen } = useShell();
   const pathname = usePathname();
-  const title = PAGE_TITLES[pathname] ?? "Messaivo";
+  const title = resolvePageTitle(pathname);
   const [userOpen, setUserOpen] = useState(false);
   const [supportOpen, setSupportOpen] = useState(false);
   const { signOut } = useAuth();
@@ -399,7 +407,11 @@ function Sidebar() {
   const [supportOpen, setSupportOpen] = useState(false);
   const pathname = usePathname();
 
-  const isActive = (href: string) => href === "/app" ? pathname === "/app" : pathname.startsWith(href);
+  const isActive = (href: string) => {
+    if (href === "/app") return pathname === "/app";
+    // Both "Templates" and "Saved Replies" point to /app/templates — both get highlighted there
+    return pathname.startsWith(href);
+  };
 
   return (
     <>

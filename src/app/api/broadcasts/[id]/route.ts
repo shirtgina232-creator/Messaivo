@@ -13,17 +13,30 @@ export async function GET(
     if (!ws) return unauthorized();
 
     const { id } = await params;
-    const broadcast = await prisma.broadcast.findFirst({
-      where: { id, workspaceId: ws.id },
-      include: {
-        _count: { select: { recipients: true } },
-        template: { select: { fields: true, content: true } },
-        messageTemplate: { select: { fields: true, content: true } },
-      },
-    });
+    const [broadcast, recipientStats] = await Promise.all([
+      prisma.broadcast.findFirst({
+        where: { id, workspaceId: ws.id },
+        include: {
+          _count: { select: { recipients: true } },
+          template: { select: { fields: true, content: true } },
+          messageTemplate: { select: { fields: true, content: true } },
+        },
+      }),
+      prisma.broadcastRecipient.groupBy({
+        by: ["status"],
+        where: { broadcast: { id, workspaceId: ws.id } },
+        _count: { status: true },
+      }),
+    ]);
 
     if (!broadcast) return notFound("Broadcast not found");
-    return ok({ broadcast });
+
+    const statusCounts = recipientStats.reduce<Record<string, number>>((acc, row) => {
+      acc[row.status] = row._count.status;
+      return acc;
+    }, {});
+
+    return ok({ broadcast, recipientStats: statusCounts });
   } catch (e) {
     console.error("[GET /api/broadcasts/[id]]", e);
     return serverError();

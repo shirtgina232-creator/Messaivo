@@ -75,7 +75,8 @@ export async function POST(
     const sentAt = new Date();
     let sentCount = 0;
     let failedCount = 0;
-    let ineligibleCount = 0;
+    let ineligibleCount = 0; // window-closed (no recent inbound message)
+    let skippedCount = 0;    // unsubscribed contacts
     const windowCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const sentRecipientIds: string[] = [];
     const failedUpdates: Array<{ rid: string; reason: string }> = [];
@@ -83,6 +84,7 @@ export async function POST(
     // Send to each recipient sequentially
     for (const recipient of broadcast.recipients) {
       if (!recipient.contact.isSubscribed) {
+        skippedCount++;
         failedCount++;
         failedUpdates.push({
           rid: recipient.id,
@@ -184,12 +186,14 @@ export async function POST(
         completedAt: new Date(),
         sent: sentCount,
         failed: failedCount,
+        ineligibleCount,
+        skippedCount,
         creditsUsed: sentCount,
       },
     });
 
     console.log(
-      `[broadcasts/send] id=${id} sent=${sentCount} failed=${failedCount} status=${finalStatus}`,
+      `[broadcasts/send] id=${id} sent=${sentCount} failed=${failedCount} ineligible=${ineligibleCount} skipped=${skippedCount} status=${finalStatus}`,
     );
 
     return ok({
@@ -197,6 +201,7 @@ export async function POST(
       sent: sentCount,
       failed: failedCount,
       ineligible: ineligibleCount,
+      skipped: skippedCount,
       total: broadcast.recipients.length,
       broadcast: updated,
     });
