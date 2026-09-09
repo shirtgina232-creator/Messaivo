@@ -121,7 +121,7 @@ function StatCard({
 function RecipientRow({ r }: { r: Recipient }) {
   const [expanded, setExpanded] = useState(false);
   const cfg = RECIPIENT_STATUS_CONFIG[r.status] ?? { label: r.status, color: "#8B95A7" };
-  const displayName = r.contact.name ?? [r.contact.firstName, r.contact.lastName].filter(Boolean).join(" ") || r.contact.metaUserId;
+  const displayName = (r.contact.name ?? [r.contact.firstName, r.contact.lastName].filter(Boolean).join(" ")) || r.contact.metaUserId;
 
   return (
     <div style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
