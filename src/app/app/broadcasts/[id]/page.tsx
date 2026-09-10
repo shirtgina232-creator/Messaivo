@@ -33,6 +33,26 @@ interface Broadcast {
   messageTemplate: { content: string } | null;
 }
 
+interface ProgressData {
+  status: string;
+  total: number;
+  sent: number;
+  failed: number;
+  ineligible: number;
+  skipped: number;
+  processed: number;
+  percentComplete: number;
+  estimatedSecondsLeft: number | null;
+  job: {
+    status: string;
+    batchSize: number;
+    attemptCount: number;
+    lastAttemptAt: string | null;
+    scheduledFor: string;
+    lastError: string | null;
+  } | null;
+}
+
 interface Recipient {
   id: string;
   status: string;
@@ -157,6 +177,7 @@ export default function BroadcastDetailPage() {
   const id = params?.id as string;
 
   const [broadcast, setBroadcast] = useState<Broadcast | null>(null);
+  const [progress, setProgress] = useState<ProgressData | null>(null);
   const [recipientStats, setRecipientStats] = useState<Record<string, number>>({});
   const [recipients, setRecipients] = useState<Recipient[]>([]);
   const [recipientsFilter, setRecipientsFilter] = useState<string>("all");
@@ -203,12 +224,30 @@ export default function BroadcastDetailPage() {
   useEffect(() => { fetchBroadcast(); }, [fetchBroadcast]);
   useEffect(() => { setRecipients([]); setRecipientsCursor(null); fetchRecipients(); }, [fetchRecipients]);
 
-  // Auto-refresh while broadcast is sending
+  // Poll progress endpoint every 3s while sending; refresh full broadcast every 12s
   useEffect(() => {
     if (broadcast?.status !== "sending") return;
-    const interval = setInterval(() => fetchBroadcast(true), 4000);
-    return () => clearInterval(interval);
-  }, [broadcast?.status, fetchBroadcast]);
+
+    const pollProgress = async () => {
+      try {
+        const res = await fetch(`/api/broadcasts/${id}/progress`);
+        if (!res.ok) return;
+        const data: ProgressData = await res.json();
+        setProgress(data);
+        // If the job finished, do a full broadcast refresh to update all fields
+        if (data.status !== "sending") fetchBroadcast(true);
+      } catch { /* ignore */ }
+    };
+
+    pollProgress();
+    const progressInterval = setInterval(pollProgress, 3000);
+    const broadcastInterval = setInterval(() => fetchBroadcast(true), 12000);
+
+    return () => {
+      clearInterval(progressInterval);
+      clearInterval(broadcastInterval);
+    };
+  }, [broadcast?.status, id, fetchBroadcast]);
 
   if (loading) {
     return (
@@ -302,27 +341,76 @@ export default function BroadcastDetailPage() {
         {/* Status banner */}
         {(broadcast.status === "completed" || broadcast.status === "failed" || broadcast.status === "sending") && (
           <div
-            className="flex items-center gap-3 p-4 rounded-xl mb-6"
+            className="p-4 rounded-xl mb-6"
             style={{
               background: broadcast.status === "completed" ? "rgba(16,185,129,0.07)" : broadcast.status === "sending" ? "rgba(59,130,246,0.07)" : "rgba(239,68,68,0.07)",
               border: `1px solid ${broadcast.status === "completed" ? "rgba(16,185,129,0.2)" : broadcast.status === "sending" ? "rgba(59,130,246,0.2)" : "rgba(239,68,68,0.2)"}`,
             }}
           >
-            <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: cfg.bg }}>
-              <StatusIcon size={17} style={{ color: cfg.color }} className={broadcast.status === "sending" ? "animate-spin" : ""} />
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: cfg.bg }}>
+                <StatusIcon size={17} style={{ color: cfg.color }} className={broadcast.status === "sending" ? "animate-spin" : ""} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[13.5px] font-semibold" style={{ color: cfg.color }}>{cfg.label}</p>
+                <p className="text-[12.5px]" style={{ color: "#8B95A7" }}>
+                  {broadcast.status === "completed" && "Broadcast finished successfully."}
+                  {broadcast.status === "failed" && "Broadcast completed with no successful deliveries."}
+                  {broadcast.status === "sending" && (
+                    progress
+                      ? `Sending batch ${Math.ceil(progress.processed / (progress.job?.batchSize ?? 50))} · ${progress.processed.toLocaleString()} of ${progress.total.toLocaleString()} processed`
+                      : "Broadcast is being delivered — first batch processes within 60 seconds…"
+                  )}
+                </p>
+              </div>
+              {broadcast.status === "sending" && progress && (
+                <div className="text-right shrink-0">
+                  <span className="text-[13px] font-bold tabular-nums" style={{ color: "#3B82F6" }}>
+                    {progress.percentComplete}%
+                  </span>
+                  {progress.estimatedSecondsLeft !== null && progress.estimatedSecondsLeft > 0 && (
+                    <p className="text-[10.5px]" style={{ color: "#8B95A7" }}>
+                      ~{progress.estimatedSecondsLeft < 60
+                        ? `${progress.estimatedSecondsLeft}s left`
+                        : `${Math.round(progress.estimatedSecondsLeft / 60)}m left`}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
-            <div>
-              <p className="text-[13.5px] font-semibold" style={{ color: cfg.color }}>{cfg.label}</p>
-              <p className="text-[12.5px]" style={{ color: "#8B95A7" }}>
-                {broadcast.status === "completed" && "Broadcast finished successfully."}
-                {broadcast.status === "failed" && "Broadcast completed with no successful deliveries."}
-                {broadcast.status === "sending" && "Broadcast is currently being sent…"}
-              </p>
-            </div>
+
+            {/* Live progress bar — only while sending */}
             {broadcast.status === "sending" && (
-              <span className="ml-auto text-[12px] font-semibold animate-pulse" style={{ color: "#3B82F6" }}>
-                {broadcast.sent + broadcast.failed} / {broadcast.totalRecipients}
-              </span>
+              <div className="mt-3 rounded-full overflow-hidden" style={{ height: 4, background: "rgba(59,130,246,0.15)" }}>
+                <div
+                  className="h-full rounded-full transition-all duration-1000"
+                  style={{
+                    width: `${progress?.percentComplete ?? Math.round(((broadcast.sent + broadcast.failed) / Math.max(1, broadcast.totalRecipients)) * 100)}%`,
+                    background: "linear-gradient(90deg, #3B82F6, #6C63FF)",
+                  }}
+                />
+              </div>
+            )}
+
+            {/* Job queue status */}
+            {broadcast.status === "sending" && progress?.job && (
+              <div className="mt-2 flex items-center gap-3 flex-wrap">
+                <span className="text-[10.5px] font-medium px-2 py-0.5 rounded-full"
+                  style={{
+                    background: progress.job.status === "processing" ? "rgba(59,130,246,0.15)" : "rgba(139,149,167,0.12)",
+                    color: progress.job.status === "processing" ? "#3B82F6" : "#8B95A7",
+                  }}>
+                  Worker: {progress.job.status}
+                </span>
+                <span className="text-[10.5px]" style={{ color: "#8B95A7" }}>
+                  Batch size: {progress.job.batchSize} recipients
+                </span>
+                {progress.job.lastError && (
+                  <span className="text-[10.5px]" style={{ color: "#F59E0B" }}>
+                    ⚠ {progress.job.lastError}
+                  </span>
+                )}
+              </div>
             )}
           </div>
         )}

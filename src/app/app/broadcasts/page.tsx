@@ -218,7 +218,7 @@ function DraftDetailModal({ broadcast: initialBroadcast, onClose, onSent }: {
   const [testError, setTestError] = useState("");
 
   const [sending, setSending] = useState(false);
-  const [sendResult, setSendResult] = useState<{ sent: number; failed: number; ineligible: number; status: string } | null>(null);
+  const [sendResult, setSendResult] = useState<{ sent: number; failed: number; ineligible: number; status: string; queued?: boolean; message?: string } | null>(null);
   const [sendError, setSendError] = useState("");
 
   const page = pages.find(p => p.id === broadcast.pageId);
@@ -331,10 +331,18 @@ function DraftDetailModal({ broadcast: initialBroadcast, onClose, onSent }: {
     setSendError("");
     try {
       const res = await fetch(`/api/broadcasts/${broadcast.id}/send`, { method: "POST" });
-      const d = await res.json() as { status?: string; sent?: number; failed?: number; ineligible?: number; broadcast?: BroadcastItem; error?: string };
-      if (res.ok && d.broadcast) {
-        setSendResult({ sent: d.sent ?? 0, failed: d.failed ?? 0, ineligible: d.ineligible ?? 0, status: d.status ?? "completed" });
-        onSent(d.broadcast);
+      const d = await res.json() as { queued?: boolean; message?: string; status?: string; sent?: number; failed?: number; ineligible?: number; broadcast?: BroadcastItem; error?: string };
+      if (res.ok) {
+        setSendResult({
+          sent: d.sent ?? 0,
+          failed: d.failed ?? 0,
+          ineligible: d.ineligible ?? 0,
+          status: d.status ?? "sending",
+          queued: d.queued,
+          message: d.message,
+        });
+        // Update the broadcast in the list to show "sending" status
+        onSent({ ...broadcast, status: "sending" } as BroadcastItem);
       } else {
         setSendError(d.error ?? "Failed to send broadcast.");
       }
@@ -381,22 +389,39 @@ function DraftDetailModal({ broadcast: initialBroadcast, onClose, onSent }: {
         <div className="px-6 py-5 flex flex-col gap-5 overflow-y-auto flex-1 min-h-0">
           {sendResult ? (
             <div className="flex flex-col items-center justify-center py-8 gap-4">
-              <div className="w-14 h-14 rounded-full flex items-center justify-center"
-                style={{ background: sendResult.failed === 0 ? "rgba(16,185,129,0.15)" : "rgba(245,158,11,0.12)" }}>
-                {sendResult.failed === 0 ? <Check size={24} style={{ color: "#10B981" }} /> : <Send size={22} style={{ color: "#F59E0B" }} />}
-              </div>
-              <div className="text-[16px] font-semibold" style={{ color: "#F5F7FA" }}>
-                {sendResult.status === "completed" ? "Broadcast sent!" : "Broadcast failed"}
-              </div>
-              <div className="flex gap-4 text-[13px]">
-                <span style={{ color: "#10B981" }}>{sendResult.sent} delivered</span>
-                {sendResult.ineligible > 0 && <span style={{ color: "#F59E0B" }}>{sendResult.ineligible} window closed</span>}
-                {(sendResult.failed - sendResult.ineligible) > 0 && <span style={{ color: "#EF4444" }}>{sendResult.failed - sendResult.ineligible} failed</span>}
-              </div>
-              {sendResult.ineligible > 0 && (
-                <p className="text-[12px] text-center max-w-xs" style={{ color: "#8B95A7" }}>
-                  {sendResult.ineligible} recipient{sendResult.ineligible !== 1 ? "s were" : " was"} skipped — their 24-hour Messenger window had closed. No credits were charged for these.
-                </p>
+              {sendResult.queued ? (
+                <>
+                  <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{ background: "rgba(108,99,255,0.15)" }}>
+                    <Radio size={24} style={{ color: "#8B85FF" }} />
+                  </div>
+                  <div className="text-[16px] font-semibold" style={{ color: "#F5F7FA" }}>Queued for delivery</div>
+                  <p className="text-[12.5px] text-center max-w-xs leading-relaxed" style={{ color: "#8B95A7" }}>
+                    {sendResult.message ?? "The broadcast is queued. The first batch of recipients will be processed within 60 seconds."}
+                  </p>
+                  <p className="text-[11.5px] text-center max-w-xs" style={{ color: "#8B95A7", opacity: 0.7 }}>
+                    Open the broadcast to track live delivery progress.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <div className="w-14 h-14 rounded-full flex items-center justify-center"
+                    style={{ background: sendResult.failed === 0 ? "rgba(16,185,129,0.15)" : "rgba(245,158,11,0.12)" }}>
+                    {sendResult.failed === 0 ? <Check size={24} style={{ color: "#10B981" }} /> : <Send size={22} style={{ color: "#F59E0B" }} />}
+                  </div>
+                  <div className="text-[16px] font-semibold" style={{ color: "#F5F7FA" }}>
+                    {sendResult.status === "completed" ? "Broadcast sent!" : sendResult.status === "sending" ? "Sending…" : "Broadcast failed"}
+                  </div>
+                  <div className="flex gap-4 text-[13px]">
+                    {sendResult.sent > 0 && <span style={{ color: "#10B981" }}>{sendResult.sent} delivered</span>}
+                    {sendResult.ineligible > 0 && <span style={{ color: "#F59E0B" }}>{sendResult.ineligible} window closed</span>}
+                    {(sendResult.failed - sendResult.ineligible) > 0 && <span style={{ color: "#EF4444" }}>{sendResult.failed - sendResult.ineligible} failed</span>}
+                  </div>
+                  {sendResult.ineligible > 0 && (
+                    <p className="text-[12px] text-center max-w-xs" style={{ color: "#8B95A7" }}>
+                      {sendResult.ineligible} recipient{sendResult.ineligible !== 1 ? "s were" : " was"} skipped — their 24-hour Messenger window had closed. No credits were charged for these.
+                    </p>
+                  )}
+                </>
               )}
               <button onClick={onClose} className="mt-2 px-5 py-2 rounded-xl text-[13px] font-semibold text-white" style={{ background: "#6C63FF" }}>Done</button>
             </div>
@@ -679,7 +704,7 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
   const [saving, setSaving] = useState(false);
   const [sending, setSending] = useState(false);
   const [draftId, setDraftId] = useState<string | null>(null);
-  const [sendResult, setSendResult] = useState<{ sent: number; failed: number; ineligible: number; status: string } | null>(null);
+  const [sendResult, setSendResult] = useState<{ sent: number; failed: number; ineligible: number; status: string; queued?: boolean; message?: string } | null>(null);
   const [error, setError] = useState("");
 
   const selectedPage = pages.find(p => p.id === pageId);
@@ -823,7 +848,7 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
       setSaving(false);
       setSending(true);
       const sendRes = await fetch(`/api/broadcasts/${broadcast.id}/send`, { method: "POST" });
-      const sendData = await sendRes.json() as { status?: string; sent?: number; failed?: number; ineligible?: number; error?: string };
+      const sendData = await sendRes.json() as { queued?: boolean; message?: string; status?: string; sent?: number; failed?: number; ineligible?: number; error?: string };
 
       if (!sendRes.ok) {
         setError(sendData.error ?? "Broadcast saved as draft but sending failed.");
@@ -835,7 +860,9 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
         sent: sendData.sent ?? 0,
         failed: sendData.failed ?? 0,
         ineligible: sendData.ineligible ?? 0,
-        status: sendData.status ?? "completed",
+        status: sendData.status ?? "sending",
+        queued: sendData.queued,
+        message: sendData.message,
       });
       onCreated();
     } catch {
@@ -890,15 +917,24 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
         {sendResult ? (
           <div className="flex flex-col items-center justify-center py-14 gap-4">
             <div className="w-14 h-14 rounded-full flex items-center justify-center"
-              style={{ background: sendResult.status === "completed" ? "rgba(16,185,129,0.15)" : sendResult.status === "draft" ? "rgba(139,149,167,0.1)" : "rgba(245,158,11,0.1)" }}>
-              {sendResult.status === "completed" ? <Check size={24} style={{ color: "#10B981" }} />
+              style={{ background: sendResult.queued ? "rgba(108,99,255,0.15)" : sendResult.status === "completed" ? "rgba(16,185,129,0.15)" : sendResult.status === "draft" ? "rgba(139,149,167,0.1)" : "rgba(245,158,11,0.1)" }}>
+              {sendResult.queued ? <Radio size={24} style={{ color: "#8B85FF" }} />
+                : sendResult.status === "completed" ? <Check size={24} style={{ color: "#10B981" }} />
                 : sendResult.status === "draft" ? <FileText size={22} style={{ color: "#8B95A7" }} />
                 : <Circle size={22} style={{ color: "#F59E0B" }} />}
             </div>
             <div className="text-[16px] font-semibold" style={{ color: "#F5F7FA" }}>
-              {sendResult.status === "completed" ? "Broadcast sent!" : sendResult.status === "draft" ? "Saved as draft" : "Scheduled!"}
+              {sendResult.queued ? "Queued for delivery"
+                : sendResult.status === "completed" ? "Broadcast sent!"
+                : sendResult.status === "draft" ? "Saved as draft"
+                : "Scheduled!"}
             </div>
-            {sendResult.status === "completed" && (
+            {sendResult.queued && (
+              <p className="text-[12.5px] text-center max-w-xs leading-relaxed" style={{ color: "#8B95A7" }}>
+                {sendResult.message ?? "The first batch processes within 60 seconds. Open the broadcast to track live delivery progress."}
+              </p>
+            )}
+            {sendResult.status === "completed" && !sendResult.queued && (
               <div className="flex items-center gap-4 text-[13px]">
                 <span style={{ color: "#10B981" }}>{sendResult.sent} sent</span>
                 {sendResult.ineligible > 0 && <span style={{ color: "#F59E0B" }}>{sendResult.ineligible} window closed</span>}

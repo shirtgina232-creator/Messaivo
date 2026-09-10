@@ -200,7 +200,8 @@ model Broadcast {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  recipients BroadcastRecipient[]
+  recipients   BroadcastRecipient[]
+  broadcastJob BroadcastJob?
 }
 
 // Broadcast recipients
@@ -219,6 +220,29 @@ model BroadcastRecipient {
   failureReason String?
 
   @@unique([broadcastId, contactId])
+}
+
+// Broadcast delivery job — one per broadcast, drives the async cron worker
+model BroadcastJob {
+  id          String    @id @default(cuid())
+  broadcastId String    @unique
+  broadcast   Broadcast @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+
+  status        String    @default("queued")   // queued | processing | completed | failed | cancelled
+  batchSize     Int       @default(50)         // recipients per worker invocation
+
+  attemptCount  Int       @default(0)
+  lastAttemptAt DateTime?
+  lastError     String?
+
+  scheduledFor  DateTime  @default(now())      // earliest time this job may run
+  lockedAt      DateTime?                      // set when a worker claims the job
+  lockedBy      String?                        // worker invocation ID (stale-lock detection)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, scheduledFor])
 }
 
 // Message Templates
