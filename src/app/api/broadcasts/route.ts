@@ -58,7 +58,7 @@ export async function POST(req: Request) {
       return badRequest("Invalid JSON body");
     }
 
-    const { name, message, pageId, templateId, messageTemplateId, fieldValues, scheduledAt, contactIds, allPageContacts } = body as Record<string, unknown>;
+    const { name, message, pageId, templateId, messageTemplateId, fieldValues, scheduledAt, contactIds, allPageContacts, allowSubscriberSend } = body as Record<string, unknown>;
 
     if (!name || typeof name !== "string" || !name.trim()) return badRequest("name is required");
 
@@ -197,6 +197,7 @@ export async function POST(req: Request) {
         templateName: resolvedTemplateName,
         fieldValues: resolvedFieldValues ?? undefined,
         scheduledAt: typeof scheduledAt === "string" ? new Date(scheduledAt) : null,
+        allowSubscriberSend: allowSubscriberSend === true,
         status: "draft",
         totalRecipients: validContactIds.length,
         recipients: validContactIds.length > 0 ? {

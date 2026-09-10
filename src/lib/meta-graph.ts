@@ -13,7 +13,8 @@ export interface SendResult {
 
 /**
  * Send a text message from a Facebook Page to a user via Messenger.
- * Uses messaging_type RESPONSE (within 24-hour window).
+ * messagingType defaults to "RESPONSE" (within 24-hour window).
+ * Pass "UPDATE" for utility templates sent to page subscribers outside the 24-hour window.
  * Token must already be decrypted before passing here.
  */
 export async function sendMessengerMessage(
@@ -21,6 +22,7 @@ export async function sendMessengerMessage(
   metaPageId: string,
   recipientPsid: string,
   text: string,
+  messagingType: "RESPONSE" | "UPDATE" = "RESPONSE",
 ): Promise<SendResult> {
   let res: Response;
   try {
@@ -31,7 +33,7 @@ export async function sendMessengerMessage(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           recipient: { id: recipientPsid },
-          messaging_type: "RESPONSE",
+          messaging_type: messagingType,
           message: { text },
         }),
       },

@@ -188,6 +188,8 @@ model Broadcast {
   startedAt    DateTime?
   completedAt  DateTime?
 
+  allowSubscriberSend Boolean @default(false) // send to page subscribers outside 24h window using messaging_type UPDATE + UTILITY template
+
   totalRecipients Int @default(0)
   sent            Int @default(0)
   delivered       Int @default(0)
