@@ -7,14 +7,9 @@ export async function POST(req: Request) {
     if (!ws) return unauthorized();
 
     let body: unknown;
-    try {
-      body = await req.json();
-    } catch {
-      return badRequest("Invalid JSON body");
-    }
+    try { body = await req.json(); } catch { return badRequest("Invalid JSON body"); }
 
     const { pageId, contactIds } = body as Record<string, unknown>;
-
     if (!pageId || typeof pageId !== "string") return badRequest("pageId is required");
 
     const page = await prisma.facebookPage.findFirst({
@@ -40,21 +35,50 @@ export async function POST(req: Request) {
       });
     }
 
-    let eligible = 0;
-    let ineligible = 0;
-    let skipped = 0;
+    // Granular breakdown — each contact falls into exactly one bucket.
+    //
+    // Messaging method in use: messaging_type "RESPONSE"
+    //   Requires: the recipient sent a message to the Page within the last 24 hours.
+    //   No alternative method exists in this application.
+    //   MESSAGE_TAG and ACCOUNT_UPDATE are NOT used — they require separate Meta
+    //   approval and are strictly prohibited for promotional content.
+
+    let windowOpen = 0;       // Subscribed + inbound message within 24 h  → can receive
+    let windowClosed = 0;     // Subscribed + inbound message but > 24 h ago → CANNOT receive
+    let neverMessaged = 0;    // Subscribed + no inbound message on record   → CANNOT receive
+    let unsubscribed = 0;     // Opted out (isSubscribed = false)             → CANNOT receive
 
     for (const c of contacts) {
       if (!c.isSubscribed) {
-        skipped++;
-      } else if (!c.lastMessageAt || c.lastMessageAt < windowCutoff) {
-        ineligible++;
+        unsubscribed++;
+      } else if (!c.lastMessageAt) {
+        neverMessaged++;
+      } else if (c.lastMessageAt < windowCutoff) {
+        windowClosed++;
       } else {
-        eligible++;
+        windowOpen++;
       }
     }
 
-    return ok({ total: contacts.length, eligible, ineligible, skipped });
+    // "Eligible for method" = contacts that CAN be sent to right now using RESPONSE.
+    // This is exactly windowOpen — nothing else qualifies under current platform rules.
+    const eligibleForMethod = windowOpen;
+    const cannotSend = contacts.length - eligibleForMethod;
+
+    // Legacy aliases kept so older callers continue to work without a breaking change.
+    return ok({
+      total: contacts.length,
+      windowOpen,
+      windowClosed,
+      neverMessaged,
+      unsubscribed,
+      eligibleForMethod,
+      cannotSend,
+      // Legacy fields — deprecated, use the named fields above
+      eligible: windowOpen,
+      ineligible: windowClosed + neverMessaged,
+      skipped: unsubscribed,
+    });
   } catch (e) {
     console.error("[POST /api/broadcasts/eligibility-check]", e);
     return serverError();

@@ -4,10 +4,11 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   Plus, X, Check, AlertCircle, Search, FileText, Users, Send,
-  Loader2, ExternalLink, MessageSquare, BookOpen, Clock, Radio,
-  Calendar, ChevronDown, ChevronRight, Circle,
+  Loader2, ExternalLink, MessageSquare, BookOpen, Clock,
+  Calendar, ChevronDown, ChevronRight, LayoutDashboard, Radio,
 } from "lucide-react";
 import { useWorkspace } from "@/lib/workspace-context";
+import { SendWorkflow } from "@/components/app/SendWorkflow";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -35,6 +36,7 @@ interface GlobalTemplate {
 interface UserTemplate {
   id: string;
   name: string;
+  description: string | null;
   content: string;
   fields: TemplateField[] | null;
   category: string | null;
@@ -1310,12 +1312,287 @@ function SendHistorySection() {
   );
 }
 
+// ── Dashboard Section ──────────────────────────────────────────────────────────
+
+interface DashboardStats {
+  templates: { total: number; available: number; draft: number; pendingReview: number; rejected: number; disabled: number };
+  campaigns: { total: number; totalSent: number; totalDelivered: number; totalFailed: number; totalSkipped: number; creditsUsed: number };
+  recentBroadcasts: Array<{
+    id: string; name: string; status: string; templateName: string | null;
+    totalRecipients: number; sent: number; failed: number; ineligibleCount: number;
+    createdAt: string; completedAt: string | null; startedAt: string | null; scheduledAt: string | null;
+    pageId: string | null;
+  }>;
+  recentTemplates: Array<{ id: string; name: string; status: string; updatedAt: string; createdAt: string }>;
+}
+
+const STATUS_BADGE: Record<string, { label: string; color: string; bg: string }> = {
+  draft:          { label: "Draft",          color: "#8B95A7", bg: "rgba(139,149,167,0.1)" },
+  scheduled:      { label: "Scheduled",      color: "#F59E0B", bg: "rgba(245,158,11,0.1)"  },
+  sending:        { label: "Sending",        color: "#8B85FF", bg: "rgba(108,99,255,0.1)"  },
+  completed:      { label: "Delivered",      color: "#10B981", bg: "rgba(16,185,129,0.1)"  },
+  failed:         { label: "Failed",         color: "#EF4444", bg: "rgba(239,68,68,0.1)"   },
+  cancelled:      { label: "Cancelled",      color: "#8B95A7", bg: "rgba(139,149,167,0.1)" },
+  pending_review: { label: "Pending Review", color: "#F59E0B", bg: "rgba(245,158,11,0.1)"  },
+  approved:       { label: "Approved",       color: "#10B981", bg: "rgba(16,185,129,0.1)"  },
+  rejected:       { label: "Rejected",       color: "#EF4444", bg: "rgba(239,68,68,0.1)"   },
+  disabled:       { label: "Disabled",       color: "#8B95A7", bg: "rgba(139,149,167,0.08)"},
+};
+
+function StatusPill({ status }: { status: string }) {
+  const s = STATUS_BADGE[status] ?? STATUS_BADGE.draft;
+  return (
+    <span className="text-[10.5px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap"
+      style={{ background: s.bg, color: s.color }}>{s.label}</span>
+  );
+}
+
+function StatCard({ label, value, sub, accent, icon: Icon, onClick }: {
+  label: string; value: number | string; sub?: string;
+  accent: string; icon: React.ComponentType<{ size?: number }>;
+  onClick?: () => void;
+}) {
+  return (
+    <button onClick={onClick} disabled={!onClick}
+      className="flex flex-col p-5 rounded-2xl text-left w-full"
+      style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", cursor: onClick ? "pointer" : "default" }}
+      onMouseEnter={e => onClick && (e.currentTarget.style.background = "rgba(255,255,255,0.05)")}
+      onMouseLeave={e => onClick && (e.currentTarget.style.background = "rgba(255,255,255,0.03)")}>
+      <div className="flex items-center justify-between mb-4">
+        <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: `${accent}18`, color: accent }}>
+          <Icon size={16} />
+        </div>
+      </div>
+      <div className="text-[26px] font-bold tabular-nums leading-none mb-1.5" style={{ color: "#F5F7FA" }}>
+        {typeof value === "number" ? value.toLocaleString() : value}
+      </div>
+      <div className="text-[12px] font-medium" style={{ color: "#8B95A7" }}>{label}</div>
+      {sub && <div className="text-[11px] mt-1" style={{ color: "rgba(139,149,167,0.6)" }}>{sub}</div>}
+    </button>
+  );
+}
+
+function ActivityItem({ icon: Icon, color, title, sub, time }: {
+  icon: React.ComponentType<{ size?: number }>; color: string;
+  title: React.ReactNode; sub?: string; time: string;
+}) {
+  return (
+    <div className="flex items-start gap-3 py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+      <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 mt-0.5" style={{ background: `${color}18`, color }}>
+        <Icon size={12} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-[12.5px] font-medium leading-snug" style={{ color: "#F5F7FA" }}>{title}</div>
+        {sub && <div className="text-[11.5px] mt-0.5" style={{ color: "#8B95A7" }}>{sub}</div>}
+      </div>
+      <div className="text-[11px] shrink-0" style={{ color: "rgba(139,149,167,0.6)" }}>{time}</div>
+    </div>
+  );
+}
+
+function timeAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 2) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `${d}d ago`;
+  return fmtDate(iso);
+}
+
+function DashboardSection({ onCompose, onViewHistory, onViewMessages }: {
+  onCompose: () => void;
+  onViewHistory: () => void;
+  onViewMessages: () => void;
+}) {
+  const { pages } = useWorkspace();
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch("/api/broadcasts/stats")
+      .then(r => r.ok ? r.json() : null)
+      .then((d: DashboardStats | null) => { if (d) setStats(d); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  // Activity feed: recent campaign events only (template status changes are admin-internal)
+  const activity: Array<{ key: string; date: string; item: DashboardStats["recentBroadcasts"][0] }> = [];
+  if (stats) {
+    stats.recentBroadcasts.forEach(b => activity.push({ key: `b-${b.id}`, date: b.completedAt ?? b.startedAt ?? b.scheduledAt ?? b.createdAt, item: b }));
+    activity.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }
+
+  const deliveryRate = stats && stats.campaigns.totalSent > 0
+    ? Math.round((stats.campaigns.totalDelivered / stats.campaigns.totalSent) * 100)
+    : null;
+
+  return (
+    <div className="flex flex-col gap-7">
+
+      {/* Primary actions */}
+      <div className="flex items-center gap-3">
+        <button onClick={onCompose}
+          className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-[13px] font-semibold text-white"
+          style={{ background: "#6C63FF" }}>
+          <Send size={14} /> Send Message
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="h-28 rounded-2xl animate-pulse" style={{ background: "rgba(255,255,255,0.04)" }} />
+          ))}
+        </div>
+      ) : stats ? (
+        <>
+          {/* Template stats */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-[11px] font-semibold uppercase tracking-widest" style={{ color: "#8B95A7" }}>Templates</h2>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <StatCard label="Total Templates"       value={stats.templates.total}             accent="#8B85FF" icon={FileText} />
+              <StatCard label="Available for Sending" value={stats.templates.available}         accent="#10B981" icon={Check}    sub="Available in Send workflow" />
+              <StatCard label="Pending Review"        value={stats.templates.pendingReview}     accent="#F59E0B" icon={Clock}    sub={stats.templates.pendingReview > 0 ? "Awaiting admin review" : undefined} />
+              <StatCard label="Total Campaigns"       value={stats.campaigns.total}             accent="#8B85FF" icon={Radio} />
+            </div>
+          </div>
+
+          {/* Campaign stats */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-[11px] font-semibold uppercase tracking-widest" style={{ color: "#8B95A7" }}>Message Campaigns</h2>
+              <button onClick={onViewHistory} className="text-[11.5px] flex items-center gap-1" style={{ color: "#8B85FF" }}>
+                View history <ChevronRight size={12} />
+              </button>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <StatCard label="Messages Sent"    value={stats.campaigns.totalSent}      accent="#8B85FF" icon={Send}  sub="Total recipients targeted" />
+              <StatCard label="Delivered"        value={stats.campaigns.totalDelivered} accent="#10B981" icon={Check} sub={deliveryRate !== null ? `${deliveryRate}% delivery rate` : undefined} />
+              <StatCard label="Failed / Skipped" value={stats.campaigns.totalFailed + stats.campaigns.totalSkipped} accent="#EF4444" icon={AlertCircle} sub={stats.campaigns.totalSkipped > 0 ? `${stats.campaigns.totalSkipped.toLocaleString()} window-closed` : undefined} />
+            </div>
+          </div>
+
+          {/* Two-column: activity + campaigns */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+            {/* Recent Activity */}
+            <div className="rounded-2xl overflow-hidden" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)" }}>
+              <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                <h3 className="text-[13px] font-semibold" style={{ color: "#F5F7FA" }}>Recent Activity</h3>
+              </div>
+              <div className="px-5 divide-y divide-white/[0.04]">
+                {activity.length === 0 ? (
+                  <p className="text-[12.5px] py-8 text-center" style={{ color: "#8B95A7" }}>No activity yet.</p>
+                ) : activity.slice(0, 8).map(a => {
+                  const b = a.item;
+                  const s = STATUS_BADGE[b.status] ?? STATUS_BADGE.draft;
+                  const delivered = b.status === "completed" ? b.sent : null;
+                  return (
+                    <ActivityItem key={a.key}
+                      icon={Send} color={s.color}
+                      title={<span>Campaign <span style={{ color: "#F5F7FA" }}>&ldquo;{b.name}&rdquo;</span> — <span style={{ color: s.color }}>{s.label}</span></span>}
+                      sub={delivered !== null ? `${delivered.toLocaleString()} delivered of ${b.totalRecipients.toLocaleString()} targeted` : b.templateName ?? undefined}
+                      time={timeAgo(a.date)} />
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Recent Campaign History */}
+            <div className="rounded-2xl overflow-hidden" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)" }}>
+              <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                <h3 className="text-[13px] font-semibold" style={{ color: "#F5F7FA" }}>Recent Campaigns</h3>
+                <button onClick={onViewHistory} className="text-[11.5px] flex items-center gap-1" style={{ color: "#8B85FF" }}>
+                  Full history <ChevronRight size={12} />
+                </button>
+              </div>
+
+              {stats.recentBroadcasts.length === 0 ? (
+                <div className="px-5 py-12 flex flex-col items-center gap-3">
+                  <div style={{ color: "#8B95A7", opacity: 0.2 }}><Radio size={28} /></div>
+                  <p className="text-[12.5px] text-center" style={{ color: "#8B95A7" }}>No campaigns yet. Send your first message to get started.</p>
+                  <button onClick={onCompose} className="flex items-center gap-2 px-4 py-2 rounded-xl text-[12.5px] font-semibold text-white" style={{ background: "#6C63FF" }}>
+                    <Send size={12} /> Send Message
+                  </button>
+                </div>
+              ) : (
+                <div className="flex flex-col">
+                  {stats.recentBroadcasts.map((b, i) => {
+                    const s = STATUS_BADGE[b.status] ?? STATUS_BADGE.draft;
+                    const page = pages.find(p => p.id === b.pageId);
+                    const deliveredPct = b.totalRecipients > 0 && b.status === "completed"
+                      ? Math.round((b.sent / b.totalRecipients) * 100) : null;
+                    return (
+                      <div key={b.id} className="px-5 py-3.5 flex flex-col gap-1.5"
+                        style={{ borderBottom: i < stats.recentBroadcasts.length - 1 ? "1px solid rgba(255,255,255,0.05)" : "none" }}>
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-[12.5px] font-semibold truncate" style={{ color: "#F5F7FA" }}>{b.name}</span>
+                          <StatusPill status={b.status} />
+                        </div>
+                        <div className="flex items-center gap-3 text-[11.5px]" style={{ color: "#8B95A7" }}>
+                          {page && <span>{page.name}</span>}
+                          {b.templateName && <><span>·</span><span>{b.templateName}</span></>}
+                          <span className="ml-auto">{fmtDate(b.createdAt)}</span>
+                        </div>
+                        {b.status === "completed" && (
+                          <div className="flex items-center gap-4 text-[11.5px]">
+                            <span style={{ color: "#10B981" }}>{b.sent.toLocaleString()} delivered</span>
+                            {b.ineligibleCount > 0 && <span style={{ color: "#F59E0B" }}>{b.ineligibleCount.toLocaleString()} skipped</span>}
+                            {b.failed - b.ineligibleCount > 0 && <span style={{ color: "#EF4444" }}>{(b.failed - b.ineligibleCount).toLocaleString()} failed</span>}
+                            {deliveredPct !== null && (
+                              <span className="ml-auto text-[10.5px] font-semibold" style={{ color: "#10B981" }}>{deliveredPct}%</span>
+                            )}
+                          </div>
+                        )}
+                        {b.status === "completed" && b.totalRecipients > 0 && (
+                          <div className="h-1 rounded-full overflow-hidden mt-0.5" style={{ background: "rgba(255,255,255,0.06)" }}>
+                            <div className="h-full rounded-full" style={{ width: `${Math.round((b.sent / b.totalRecipients) * 100)}%`, background: "#10B981" }} />
+                          </div>
+                        )}
+                        {b.status === "sending" && (
+                          <div className="flex items-center gap-1.5 text-[11.5px]" style={{ color: "#8B85FF" }}>
+                            <Loader2 size={11} className="animate-spin" /> Sending to {b.totalRecipients.toLocaleString()} recipients…
+                          </div>
+                        )}
+                        {b.status === "scheduled" && b.scheduledAt && (
+                          <div className="text-[11.5px]" style={{ color: "#F59E0B" }}>Scheduled for {fmtDate(b.scheduledAt)}</div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* No page connected notice */}
+          {pages.length === 0 && (
+            <div className="flex items-start gap-3 p-4 rounded-xl text-[12.5px]"
+              style={{ background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.18)", color: "#F59E0B" }}>
+              <AlertCircle size={14} className="mt-0.5 shrink-0" />
+              <span>No Facebook Page connected. Connect a Page in Settings to send utility messages.</span>
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="py-16 text-center text-[13px]" style={{ color: "#8B95A7" }}>Failed to load dashboard stats.</div>
+      )}
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
-type Section = "messages" | "templates" | "history";
+type Section = "overview" | "messages" | "history";
 
 export default function UtilityMessageCenter() {
-  const [activeSection, setActiveSection] = useState<Section>("history");
+  const [activeSection, setActiveSection] = useState<Section>("overview");
   const [showCompose, setShowCompose] = useState(false);
   const [preSelectedTemplate, setPreSelectedTemplate] = useState<GlobalTemplate | null>(null);
   const [selectedDraft, setSelectedDraft] = useState<BroadcastItem | null>(null);
@@ -1337,9 +1614,9 @@ export default function UtilityMessageCenter() {
   };
 
   const NAV: Array<{ key: Section; label: string; icon: React.ComponentType<{ size?: number }> }> = [
-    { key: "messages",  label: "Utility Messages",  icon: MessageSquare },
-    { key: "templates", label: "Template Library",  icon: BookOpen },
-    { key: "history",   label: "Send History",      icon: Clock },
+    { key: "overview",  label: "Dashboard",        icon: LayoutDashboard },
+    { key: "messages",  label: "Utility Messages", icon: MessageSquare },
+    { key: "history",   label: "Send History",     icon: Clock },
   ];
 
   return (
@@ -1375,22 +1652,26 @@ export default function UtilityMessageCenter() {
       </div>
 
       {/* Section Content */}
+      {activeSection === "overview" && (
+        <DashboardSection
+          onCompose={() => setShowCompose(true)}
+          onViewHistory={() => setActiveSection("history")}
+          onViewMessages={() => setActiveSection("messages")}
+        />
+      )}
       {activeSection === "messages" && (
         <UtilityMessagesSection
           onDraftClick={b => setSelectedDraft(b)}
           onCompose={() => setShowCompose(true)}
         />
       )}
-      {activeSection === "templates" && (
-        <TemplateLibrarySection onUseTemplate={handleUseTemplate} />
-      )}
       {activeSection === "history" && (
         <SendHistorySection />
       )}
 
-      {/* Compose Modal */}
+      {/* Send Workflow */}
       {showCompose && (
-        <ComposeForm
+        <SendWorkflow
           preSelectedTemplate={preSelectedTemplate}
           onClose={handleComposeClose}
           onCreated={handleComposeCreated}

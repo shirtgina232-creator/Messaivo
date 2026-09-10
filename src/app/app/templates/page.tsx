@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 
-// Template management has moved to the admin panel.
-// Customers access templates only through the Broadcast wizard.
+// Templates are managed by admins only. Customers access available templates
+// through the Send Message workflow at /app/broadcasts.
 export default function TemplatesPage() {
-  redirect("/app");
+  redirect("/app/broadcasts");
 }
