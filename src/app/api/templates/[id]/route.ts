@@ -1,8 +1,9 @@
 import { prisma } from "@/lib/db";
 import { Prisma } from "@prisma/client";
 import {
-  getWorkspace, unauthorized, notFound, badRequest, serverError, ok, noContent,
+  getWorkspace, unauthorized, forbidden, notFound, badRequest, serverError, ok, noContent,
 } from "@/lib/api-helpers";
+import { requireAdminWithRoles } from "@/lib/admin-helpers";
 
 export async function GET(
   _req: Request,
@@ -30,6 +31,8 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const [, adminErr] = await requireAdminWithRoles(["SUPER_ADMIN", "ADMIN"]);
+    if (adminErr) return forbidden();
     const ws = await getWorkspace();
     if (!ws) return unauthorized();
 
@@ -91,6 +94,8 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const [, adminErr] = await requireAdminWithRoles(["SUPER_ADMIN", "ADMIN"]);
+    if (adminErr) return forbidden();
     const ws = await getWorkspace();
     if (!ws) return unauthorized();
 

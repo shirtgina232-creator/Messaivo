@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
-import { getWorkspace, unauthorized, badRequest, serverError, ok, created } from "@/lib/api-helpers";
+import { getWorkspace, unauthorized, forbidden, badRequest, serverError, ok, created } from "@/lib/api-helpers";
+import { requireAdminWithRoles } from "@/lib/admin-helpers";
 
 export async function GET(req: Request) {
   try {
@@ -43,6 +44,8 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
+    const [, adminErr] = await requireAdminWithRoles(["SUPER_ADMIN", "ADMIN"]);
+    if (adminErr) return forbidden();
     const ws = await getWorkspace();
     if (!ws) return unauthorized();
 

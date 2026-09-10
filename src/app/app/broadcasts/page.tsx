@@ -689,7 +689,6 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
 
   // Step 4: Template
   const [globalTemplates, setGlobalTemplates] = useState<GlobalTemplate[]>([]);
-  const [userTemplates, setUserTemplates] = useState<UserTemplate[]>([]);
   const [tplLoading, setTplLoading] = useState(false);
   const [tplSearch, setTplSearch] = useState("");
   const [selectedTemplate, setSelectedTemplate] = useState<SelectedTemplate | null>(null);
@@ -761,13 +760,11 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
     setTplLoading(true);
     const params = new URLSearchParams();
     if (tplSearch) params.set("search", tplSearch);
-    Promise.all([
-      fetch(`/api/broadcast-templates?${params}`).then(r => r.ok ? r.json() : null),
-      fetch(`/api/templates?limit=50&status=active${tplSearch ? `&search=${encodeURIComponent(tplSearch)}` : ""}`).then(r => r.ok ? r.json() : null),
-    ]).then(([global, user]) => {
-      if (global?.templates) setGlobalTemplates(global.templates as GlobalTemplate[]);
-      if (user?.templates) setUserTemplates(user.templates as UserTemplate[]);
-    }).catch(() => {}).finally(() => setTplLoading(false));
+    fetch(`/api/broadcast-templates?${params}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data?.templates) setGlobalTemplates(data.templates as GlobalTemplate[]); })
+      .catch(() => {})
+      .finally(() => setTplLoading(false));
   }, [step, tplSearch]);
 
   // Reset field values when template changes
@@ -1129,38 +1126,8 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
                     </div>
                   ) : (
                     <>
-                      {userTemplates.length > 0 && (
-                        <div className="mb-4">
-                          <p className="text-[11px] font-semibold uppercase tracking-wider mb-2" style={{ color: "#8B95A7" }}>My Templates</p>
-                          {userTemplates.map(t => {
-                            const isSelected = selectedTemplate?.source === "user" && selectedTemplate.data.id === t.id;
-                            const customCount = (t.fields ?? []).filter(f => !CONTACT_VARS.has(f.key)).length;
-                            const contactCount = (t.fields ?? []).filter(f => CONTACT_VARS.has(f.key)).length;
-                            return (
-                              <button key={t.id} onClick={() => setSelectedTemplate({ source: "user", data: t })}
-                                className="w-full flex items-start gap-3 p-3.5 rounded-xl mb-2 text-left transition-all"
-                                style={{ background: isSelected ? "rgba(108,99,255,0.1)" : "rgba(255,255,255,0.03)", border: `1px solid ${isSelected ? "rgba(108,99,255,0.3)" : "rgba(255,255,255,0.07)"}` }}>
-                                <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5" style={{ background: "rgba(108,99,255,0.12)" }}>
-                                  <FileText size={14} style={{ color: "#8B85FF" }} />
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-center gap-2 flex-wrap">
-                                    <span className="text-[13px] font-semibold" style={{ color: "#F5F7FA" }}>{t.name}</span>
-                                    {t.category && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.06)", color: "#8B95A7" }}>{t.category}</span>}
-                                    {contactCount > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(16,185,129,0.08)", color: "#10B981" }}>Personalized</span>}
-                                  </div>
-                                  <p className="text-[11px] mt-0.5 truncate font-mono" style={{ color: "#8B95A7" }}>{t.content}</p>
-                                  {customCount > 0 && <p className="text-[10.5px] mt-0.5" style={{ color: "#6C63FF" }}>{customCount} custom field{customCount !== 1 ? "s" : ""} to fill</p>}
-                                </div>
-                                {isSelected && <Check size={14} style={{ color: "#6C63FF" }} className="mt-1 shrink-0" />}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                      {globalTemplates.length > 0 && (
+                      {globalTemplates.length > 0 ? (
                         <div>
-                          <p className="text-[11px] font-semibold uppercase tracking-wider mb-2" style={{ color: "#8B95A7" }}>Admin Templates</p>
                           {globalTemplates.map(t => {
                             const isSelected = selectedTemplate?.source === "global" && selectedTemplate.data.id === t.id;
                             return (
@@ -1183,10 +1150,9 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
                             );
                           })}
                         </div>
-                      )}
-                      {userTemplates.length === 0 && globalTemplates.length === 0 && (
+                      ) : (
                         <div className="py-8 text-center text-[13px]" style={{ color: "#8B95A7" }}>
-                          {tplSearch ? "No templates match your search." : "No templates yet. Create one in Templates, or ask your admin."}
+                          {tplSearch ? "No templates match your search." : "No active templates available. Contact your administrator."}
                         </div>
                       )}
                     </>

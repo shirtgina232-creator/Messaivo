@@ -35,10 +35,8 @@ const NAV = [
   {
     section: "MANAGE",
     items: [
-      { label: "Connections",   icon: Link2,           href: "/app/pages"       },
-      { label: "Groups",        icon: Layers,          href: "/app/groups"      },
-      { label: "Templates",     icon: FileText,        href: "/app/templates"   },
-      { label: "Saved Replies", icon: MessageCircleMore, href: "/app/templates" },
+      { label: "Connections", icon: Link2,   href: "/app/pages"  },
+      { label: "Groups",      icon: Layers,  href: "/app/groups" },
     ],
   },
   {
