@@ -9,6 +9,7 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const search = url.searchParams.get("search") ?? "";
     const category = url.searchParams.get("category") ?? undefined;
+    const status = url.searchParams.get("status") ?? undefined;
     const limit = Math.min(Number(url.searchParams.get("limit") ?? 25), 100);
     const cursor = url.searchParams.get("cursor") ?? undefined;
 
@@ -16,6 +17,7 @@ export async function GET(req: Request) {
       where: {
         workspaceId: ws.id,
         ...(category && { category }),
+        ...(status && { status }),
         ...(search && {
           OR: [
             { name: { contains: search, mode: "insensitive" } },
@@ -51,10 +53,15 @@ export async function POST(req: Request) {
       return badRequest("Invalid JSON body");
     }
 
-    const { name, content, category, tags, fields, pageId } = body as Record<string, unknown>;
+    const { name, content, category, description, status, tags, fields, pageId } = body as Record<string, unknown>;
     if (!name || typeof name !== "string" || !name.trim()) return badRequest("name is required");
     if (!content || typeof content !== "string" || !content.trim()) {
       return badRequest("content is required");
+    }
+
+    const VALID_STATUSES = new Set(["active", "draft", "inactive"]);
+    if (status !== undefined && (typeof status !== "string" || !VALID_STATUSES.has(status))) {
+      return badRequest("status must be one of: active, draft, inactive");
     }
 
     // Validate pageId if provided
@@ -71,6 +78,8 @@ export async function POST(req: Request) {
         workspaceId: ws.id,
         name: name.trim(),
         content: content.trim(),
+        description: typeof description === "string" ? description.trim() || null : null,
+        status: typeof status === "string" ? status : "active",
         category: typeof category === "string" ? category : null,
         tags: Array.isArray(tags) ? (tags as unknown[]).filter((t): t is string => typeof t === "string") : [],
         fields: Array.isArray(fields) ? fields : undefined,

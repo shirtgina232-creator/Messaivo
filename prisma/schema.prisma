@@ -253,11 +253,13 @@ model MessageTemplate {
   workspaceId String
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
-  name       String
-  content    String
-  category   String?
-  tags       String[] @default([])
-  usageCount Int      @default(0)
+  name        String
+  description String?  // internal description, not sent to recipients
+  content     String
+  category    String?
+  status      String   @default("active") // active | draft | inactive
+  tags        String[] @default([])
+  usageCount  Int      @default(0)
 
   // Structured variable definitions auto-detected from {{variable}} tokens in content
   fields     Json?

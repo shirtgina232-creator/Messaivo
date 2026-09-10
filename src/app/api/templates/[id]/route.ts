@@ -47,7 +47,12 @@ export async function PATCH(
       return badRequest("Invalid JSON body");
     }
 
-    const { name, content, category, tags, fields, pageId } = body as Record<string, unknown>;
+    const { name, content, category, description, status, tags, fields, pageId } = body as Record<string, unknown>;
+
+    const VALID_STATUSES = new Set(["active", "draft", "inactive"]);
+    if (status !== undefined && (typeof status !== "string" || !VALID_STATUSES.has(status))) {
+      return badRequest("status must be one of: active, draft, inactive");
+    }
 
     // Validate pageId if provided
     if (pageId !== undefined && pageId !== null) {
@@ -63,6 +68,8 @@ export async function PATCH(
     if (typeof name === "string" && name.trim()) updateData.name = name.trim();
     if (typeof content === "string" && content.trim()) updateData.content = content.trim();
     if (typeof category === "string") updateData.category = category;
+    if (description !== undefined) updateData.description = typeof description === "string" ? description.trim() || null : null;
+    if (typeof status === "string") updateData.status = status;
     if (Array.isArray(tags)) updateData.tags = (tags as unknown[]).filter((t): t is string => typeof t === "string");
     if (fields !== undefined) updateData.fields = Array.isArray(fields) ? (fields as Prisma.InputJsonValue) : Prisma.JsonNull;
     if (pageId !== undefined) updateData.pageId = typeof pageId === "string" ? pageId : null;

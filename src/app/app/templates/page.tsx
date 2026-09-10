@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { Plus, FileText, Edit2, Trash2, X, Check, Copy } from "lucide-react";
+import { Plus, FileText, Edit2, Trash2, X, Check, Copy, Files, AlertTriangle } from "lucide-react";
 import { useWorkspace } from "@/lib/workspace-context";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -15,11 +15,15 @@ interface TemplateField {
   required: boolean;
 }
 
+type TemplateStatus = "active" | "draft" | "inactive";
+
 type Template = {
   id: string;
   name: string;
+  description: string | null;
   category: string | null;
   content: string;
+  status: TemplateStatus;
   fields: TemplateField[] | null;
   updatedAt: string;
   usageCount: number;
@@ -27,7 +31,18 @@ type Template = {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const CATEGORIES = ["All", "Greeting", "Follow-up", "Support", "Reminder", "Thank-you"];
+const CATEGORIES = ["All", "Utility", "Reminder", "Confirmation", "Notification", "Customer Service"];
+
+const STATUS_OPTIONS: TemplateStatus[] = ["active", "draft", "inactive"];
+
+const STATUS_META: Record<TemplateStatus, { label: string; color: string; bg: string; border: string }> = {
+  active:   { label: "Active",   color: "#10B981", bg: "rgba(16,185,129,0.1)",  border: "rgba(16,185,129,0.25)" },
+  draft:    { label: "Draft",    color: "#F59E0B", bg: "rgba(245,158,11,0.1)",  border: "rgba(245,158,11,0.25)" },
+  inactive: { label: "Inactive", color: "#8B95A7", bg: "rgba(139,149,167,0.1)", border: "rgba(139,149,167,0.2)" },
+};
+
+const STATUS_FILTERS = ["All", "Active", "Draft", "Inactive"] as const;
+type StatusFilter = typeof STATUS_FILTERS[number];
 
 /** Keys automatically resolved from contact/page data — never shown as custom fields. */
 const CONTACT_VARS = new Set(["first_name", "last_name", "name", "page_name"]);
@@ -66,17 +81,67 @@ function detectVars(content: string): string[] {
 function renderPreview(
   content: string,
   customFields: TemplateField[],
-  customFieldValues: Record<string, string>,
   pageName: string,
 ): string {
-  const samples: Record<string, string> = {
-    ...CONTACT_VAR_SAMPLES,
-    page_name: pageName,
-  };
+  const samples: Record<string, string> = { ...CONTACT_VAR_SAMPLES, page_name: pageName };
   for (const f of customFields) {
-    samples[f.key] = customFieldValues[f.key]?.trim() || SAMPLE_VALUES[f.type] || "…";
+    samples[f.key] = SAMPLE_VALUES[f.type] || "…";
   }
   return content.replace(/\{\{(\w+)\}\}/g, (_, key) => samples[key] ?? `{{${key}}}`);
+}
+
+// ── Delete Confirm Dialog ─────────────────────────────────────────────────────
+
+function DeleteConfirmDialog({ name, usageCount, onCancel, onConfirm, deleting }: {
+  name: string;
+  usageCount: number;
+  onCancel: () => void;
+  onConfirm: () => void;
+  deleting: boolean;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onCancel} />
+      <div
+        className="relative w-full max-w-sm rounded-2xl p-6 flex flex-col gap-4"
+        style={{ background: "#0A111B", border: "1px solid rgba(239,68,68,0.25)" }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: "rgba(239,68,68,0.1)" }}>
+            <AlertTriangle size={18} style={{ color: "#EF4444" }} />
+          </div>
+          <div>
+            <div className="text-[14px] font-semibold" style={{ color: "#F5F7FA" }}>Delete template?</div>
+            <div className="text-[12px] mt-0.5" style={{ color: "#8B95A7" }}>
+              &ldquo;{name}&rdquo;
+              {usageCount > 0 && ` — used in ${usageCount} broadcast${usageCount !== 1 ? "s" : ""}`}
+            </div>
+          </div>
+        </div>
+        <p className="text-[12.5px] leading-relaxed" style={{ color: "#8B95A7" }}>
+          This will permanently delete the template. Existing broadcasts that reference it will not be affected.
+        </p>
+        <div className="flex gap-2 justify-end">
+          <button
+            className="text-[13px] font-medium px-4 py-2 rounded-lg"
+            style={{ color: "#8B95A7", background: "rgba(255,255,255,0.04)" }}
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+          <button
+            className="text-[13px] font-semibold px-4 py-2 rounded-lg text-white disabled:opacity-40"
+            style={{ background: "#EF4444" }}
+            disabled={deleting}
+            onClick={onConfirm}
+          >
+            {deleting ? "Deleting…" : "Delete"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ── Template Modal ────────────────────────────────────────────────────────────
@@ -90,7 +155,9 @@ function TemplateModal({ template, onClose, onSave }: {
   const previewPageName = pages[0]?.name ?? "Your Page";
 
   const [name, setName] = useState(template?.name ?? "");
-  const [category, setCategory] = useState(template?.category ?? "Greeting");
+  const [description, setDescription] = useState(template?.description ?? "");
+  const [category, setCategory] = useState(template?.category ?? CATEGORIES[1]);
+  const [status, setStatus] = useState<TemplateStatus>(template?.status ?? "active");
   const [body, setBody] = useState(template?.content ?? "");
   const [customFields, setCustomFields] = useState<TemplateField[]>(
     () => (template?.fields ?? []).filter(f => !CONTACT_VARS.has(f.key))
@@ -122,14 +189,13 @@ function TemplateModal({ template, onClose, onSave }: {
 
   const insertVar = (v: string) => setBody(prev => prev + `{{${v}}}`);
 
-  const preview = renderPreview(body, customFields, {}, previewPageName);
+  const preview = renderPreview(body, customFields, previewPageName);
 
   const handleSave = async () => {
     if (!name.trim() || !body.trim()) return;
     setSaving(true);
     setError("");
     try {
-      // Build fields array: contact vars as read-only markers + custom fields
       const fieldsPayload: TemplateField[] = [
         ...contactVarsInBody.map(k => ({
           key: k,
@@ -145,13 +211,13 @@ function TemplateModal({ template, onClose, onSave }: {
         res = await fetch(`/api/templates/${template.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: name.trim(), content: body.trim(), category, fields: fieldsPayload }),
+          body: JSON.stringify({ name: name.trim(), description: description.trim() || null, content: body.trim(), category, status, fields: fieldsPayload }),
         });
       } else {
         res = await fetch("/api/templates", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: name.trim(), content: body.trim(), category, fields: fieldsPayload }),
+          body: JSON.stringify({ name: name.trim(), description: description.trim() || null, content: body.trim(), category, status, fields: fieldsPayload }),
         });
       }
       if (!res.ok) throw new Error("Save failed");
@@ -190,7 +256,7 @@ function TemplateModal({ template, onClose, onSave }: {
         ) : (
           <>
             <div className="flex-1 overflow-y-auto min-h-0">
-              <div className="grid grid-cols-2 gap-0 divide-x h-full" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
+              <div className="grid grid-cols-2 gap-0 divide-x" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
                 {/* Editor */}
                 <div className="p-5 flex flex-col gap-4">
                   <div>
@@ -203,24 +269,50 @@ function TemplateModal({ template, onClose, onSave }: {
                       style={inp}
                     />
                   </div>
+
                   <div>
-                    <label className="text-[11px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: "#8B95A7", opacity: 0.6 }}>Category</label>
-                    <select
-                      value={category ?? "Greeting"}
-                      onChange={e => setCategory(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg text-[13px] outline-none cursor-pointer"
+                    <label className="text-[11px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: "#8B95A7", opacity: 0.6 }}>Description <span className="font-normal normal-case" style={{ opacity: 0.7 }}>— internal, not sent to recipients</span></label>
+                    <input
+                      value={description}
+                      onChange={e => setDescription(e.target.value)}
+                      placeholder="Brief description for your team…"
+                      className="w-full px-3 py-2 rounded-lg text-[13px] outline-none"
                       style={inp}
-                    >
-                      {CATEGORIES.filter(c => c !== "All").map(c => <option key={c}>{c}</option>)}
-                    </select>
+                    />
                   </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[11px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: "#8B95A7", opacity: 0.6 }}>Category</label>
+                      <select
+                        value={category ?? CATEGORIES[1]}
+                        onChange={e => setCategory(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg text-[13px] outline-none cursor-pointer"
+                        style={inp}
+                      >
+                        {CATEGORIES.filter(c => c !== "All").map(c => <option key={c}>{c}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: "#8B95A7", opacity: 0.6 }}>Status</label>
+                      <select
+                        value={status}
+                        onChange={e => setStatus(e.target.value as TemplateStatus)}
+                        className="w-full px-3 py-2 rounded-lg text-[13px] outline-none cursor-pointer"
+                        style={{ ...inp, color: STATUS_META[status].color }}
+                      >
+                        {STATUS_OPTIONS.map(s => <option key={s} value={s}>{STATUS_META[s].label}</option>)}
+                      </select>
+                    </div>
+                  </div>
+
                   <div className="flex-1">
                     <label className="text-[11px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: "#8B95A7", opacity: 0.6 }}>Message Body</label>
                     <textarea
                       value={body}
                       onChange={e => setBody(e.target.value)}
                       rows={5}
-                      placeholder={"Hi {{first_name}}, this is a reminder about your upcoming appointment on {{appointment_date}}."}
+                      placeholder={"Hi {{first_name}}, a quick reminder about your upcoming appointment on {{appointment_date}}."}
                       className="w-full px-3 py-2 rounded-lg text-[12.5px] outline-none resize-none"
                       style={inp}
                     />
@@ -244,7 +336,7 @@ function TemplateModal({ template, onClose, onSave }: {
                   {customVarKeys.length > 0 && (
                     <div>
                       <div className="text-[11px] font-semibold uppercase tracking-wider mb-2" style={{ color: "#8B95A7", opacity: 0.6 }}>
-                        Custom Variables <span className="font-normal normal-case" style={{ opacity: 0.7 }}>— you fill these at broadcast time</span>
+                        Custom Variables <span className="font-normal normal-case" style={{ opacity: 0.7 }}>— filled at broadcast time</span>
                       </div>
                       <div className="flex flex-col gap-2">
                         {customFields.map(f => (
@@ -284,7 +376,6 @@ function TemplateModal({ template, onClose, onSave }: {
                 <div className="p-5 flex flex-col gap-3">
                   <div className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "#8B95A7", opacity: 0.6 }}>Live Preview</div>
 
-                  {/* Detected variable legend */}
                   {detectedVars.length > 0 && (
                     <div className="flex flex-col gap-1.5 p-3 rounded-xl" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)" }}>
                       {contactVarsInBody.length > 0 && (
@@ -361,19 +452,27 @@ export default function TemplatesPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Template | undefined>();
   const [catFilter, setCatFilter] = useState("All");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
   const [copied, setCopied] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Template | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [duplicating, setDuplicating] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/templates?limit=50")
+    fetch("/api/templates?limit=100")
       .then(r => r.ok ? r.json() : { templates: [] })
       .then(({ templates: t }: { templates: Template[] }) => setTemplates(t ?? []))
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
 
-  const filtered = catFilter === "All"
-    ? templates
-    : templates.filter(t => t.category === catFilter);
+  const filtered = useMemo(() => {
+    return templates.filter(t => {
+      const catOk = catFilter === "All" || t.category === catFilter;
+      const statusOk = statusFilter === "All" || t.status === statusFilter.toLowerCase();
+      return catOk && statusOk;
+    });
+  }, [templates, catFilter, statusFilter]);
 
   const handleSave = (t: Template) => {
     setTemplates(prev => {
@@ -383,9 +482,25 @@ export default function TemplatesPage() {
     });
   };
 
-  const handleDelete = async (id: string) => {
-    const res = await fetch(`/api/templates/${id}`, { method: "DELETE" });
-    if (res.ok) setTemplates(prev => prev.filter(t => t.id !== id));
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    const res = await fetch(`/api/templates/${deleteTarget.id}`, { method: "DELETE" });
+    if (res.ok) setTemplates(prev => prev.filter(t => t.id !== deleteTarget.id));
+    setDeleting(false);
+    setDeleteTarget(null);
+  };
+
+  const handleDuplicate = async (t: Template) => {
+    setDuplicating(t.id);
+    try {
+      const res = await fetch(`/api/templates/${t.id}/duplicate`, { method: "POST" });
+      if (res.ok) {
+        const data = await res.json() as { template: Template };
+        setTemplates(prev => [data.template, ...prev]);
+      }
+    } catch { /* silent */ }
+    setDuplicating(null);
   };
 
   const handleCopy = (content: string, id: string) => {
@@ -396,6 +511,17 @@ export default function TemplatesPage() {
 
   const customVarCount = (t: Template) =>
     (t.fields ?? []).filter(f => !CONTACT_VARS.has(f.key)).length;
+
+  // Counts per status for filter badges
+  const statusCounts = useMemo(() => {
+    const counts: Record<string, number> = { All: templates.length, Active: 0, Draft: 0, Inactive: 0 };
+    for (const t of templates) {
+      if (t.status === "active") counts.Active++;
+      else if (t.status === "draft") counts.Draft++;
+      else if (t.status === "inactive") counts.Inactive++;
+    }
+    return counts;
+  }, [templates]);
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto">
@@ -413,95 +539,155 @@ export default function TemplatesPage() {
         </button>
       </div>
 
-      {/* Category filter */}
-      <div className="flex gap-2 mb-5 overflow-x-auto pb-1">
-        {CATEGORIES.map(c => (
-          <button
-            key={c}
-            onClick={() => setCatFilter(c)}
-            className="shrink-0 text-[12px] font-medium px-3 py-1.5 rounded-lg transition-all"
-            style={{
-              background: catFilter === c ? "rgba(108,99,255,0.15)" : "rgba(255,255,255,0.04)",
-              color: catFilter === c ? "#8B85FF" : "#8B95A7",
-              border: `1px solid ${catFilter === c ? "rgba(108,99,255,0.25)" : "rgba(255,255,255,0.07)"}`,
-            }}
-          >
-            {c}
-          </button>
-        ))}
+      {/* Filters row */}
+      <div className="flex flex-col gap-3 mb-5">
+        {/* Status filter */}
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {STATUS_FILTERS.map(s => (
+            <button
+              key={s}
+              onClick={() => setStatusFilter(s)}
+              className="shrink-0 flex items-center gap-1.5 text-[12px] font-medium px-3 py-1.5 rounded-lg transition-all"
+              style={{
+                background: statusFilter === s ? "rgba(108,99,255,0.15)" : "rgba(255,255,255,0.04)",
+                color: statusFilter === s ? "#8B85FF" : "#8B95A7",
+                border: `1px solid ${statusFilter === s ? "rgba(108,99,255,0.25)" : "rgba(255,255,255,0.07)"}`,
+              }}
+            >
+              {s}
+              <span
+                className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md tabular-nums"
+                style={{
+                  background: statusFilter === s ? "rgba(108,99,255,0.25)" : "rgba(255,255,255,0.06)",
+                  color: statusFilter === s ? "#8B85FF" : "#8B95A7",
+                }}
+              >
+                {statusCounts[s]}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {/* Category filter */}
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {CATEGORIES.map(c => (
+            <button
+              key={c}
+              onClick={() => setCatFilter(c)}
+              className="shrink-0 text-[12px] font-medium px-3 py-1.5 rounded-lg transition-all"
+              style={{
+                background: catFilter === c ? "rgba(34,211,238,0.1)" : "rgba(255,255,255,0.03)",
+                color: catFilter === c ? "#22D3EE" : "#8B95A7",
+                border: `1px solid ${catFilter === c ? "rgba(34,211,238,0.2)" : "rgba(255,255,255,0.06)"}`,
+              }}
+            >
+              {c}
+            </button>
+          ))}
+        </div>
       </div>
 
       {loading ? (
         <div className="text-center py-12 text-[13px]" style={{ color: "#8B95A7" }}>Loading templates…</div>
       ) : (
         <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {filtered.map(t => (
-            <div key={t.id} className="p-5 rounded-xl flex flex-col gap-3 group" style={{ background: "#101722", border: "1px solid rgba(255,255,255,0.08)" }}>
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: "rgba(108,99,255,0.12)" }}>
-                    <FileText size={14} style={{ color: "#6C63FF" }} />
+          {filtered.map(t => {
+            const sm = STATUS_META[t.status] ?? STATUS_META.inactive;
+            return (
+              <div key={t.id} className="p-5 rounded-xl flex flex-col gap-3 group" style={{ background: "#101722", border: "1px solid rgba(255,255,255,0.08)" }}>
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: "rgba(108,99,255,0.12)" }}>
+                      <FileText size={14} style={{ color: "#6C63FF" }} />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-[13px] font-semibold truncate" style={{ color: "#F5F7FA" }}>{t.name}</div>
+                      <div className="text-[10.5px]" style={{ color: "#8B95A7" }}>{t.category ?? "General"}</div>
+                    </div>
                   </div>
-                  <div>
-                    <div className="text-[13px] font-semibold" style={{ color: "#F5F7FA" }}>{t.name}</div>
-                    <div className="text-[10.5px]" style={{ color: "#8B95A7" }}>{t.category ?? "General"}</div>
+                  <div className="flex items-center gap-1 ml-2 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      title="Copy content"
+                      className="w-7 h-7 flex items-center justify-center rounded-lg"
+                      style={{ color: "#8B95A7", background: "rgba(255,255,255,0.04)" }}
+                      onClick={() => handleCopy(t.content, t.id)}
+                    >
+                      {copied === t.id ? <Check size={12} style={{ color: "#10B981" }} /> : <Copy size={12} />}
+                    </button>
+                    <button
+                      title="Duplicate"
+                      className="w-7 h-7 flex items-center justify-center rounded-lg disabled:opacity-40"
+                      style={{ color: "#8B95A7", background: "rgba(255,255,255,0.04)" }}
+                      disabled={duplicating === t.id}
+                      onClick={() => handleDuplicate(t)}
+                    >
+                      <Files size={12} />
+                    </button>
+                    <button
+                      title="Edit"
+                      className="w-7 h-7 flex items-center justify-center rounded-lg"
+                      style={{ color: "#8B95A7", background: "rgba(255,255,255,0.04)" }}
+                      onClick={() => { setEditing(t); setModalOpen(true); }}
+                    >
+                      <Edit2 size={12} />
+                    </button>
+                    <button
+                      title="Delete"
+                      className="w-7 h-7 flex items-center justify-center rounded-lg"
+                      style={{ color: "#EF4444", background: "rgba(239,68,68,0.1)" }}
+                      onClick={() => setDeleteTarget(t)}
+                    >
+                      <Trash2 size={12} />
+                    </button>
                   </div>
                 </div>
-                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button
-                    className="w-7 h-7 flex items-center justify-center rounded-lg"
-                    style={{ color: "#8B95A7", background: "rgba(255,255,255,0.04)" }}
-                    onClick={() => handleCopy(t.content, t.id)}
-                  >
-                    {copied === t.id ? <Check size={12} style={{ color: "#10B981" }} /> : <Copy size={12} />}
-                  </button>
-                  <button
-                    className="w-7 h-7 flex items-center justify-center rounded-lg"
-                    style={{ color: "#8B95A7", background: "rgba(255,255,255,0.04)" }}
-                    onClick={() => { setEditing(t); setModalOpen(true); }}
-                  >
-                    <Edit2 size={12} />
-                  </button>
-                  <button
-                    className="w-7 h-7 flex items-center justify-center rounded-lg"
-                    style={{ color: "#EF4444", background: "rgba(239,68,68,0.1)" }}
-                    onClick={() => handleDelete(t.id)}
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-              </div>
 
-              <p className="text-[12px] leading-relaxed line-clamp-3 font-mono" style={{ color: "#8B95A7" }}>{t.content}</p>
-
-              {/* Variable tags */}
-              {(t.fields ?? []).length > 0 && (
-                <div className="flex flex-wrap gap-1">
-                  {(t.fields ?? []).filter(f => CONTACT_VARS.has(f.key)).map(f => (
-                    <span key={f.key} className="text-[9.5px] font-mono px-1.5 py-0.5 rounded" style={{ background: "rgba(16,185,129,0.08)", color: "#10B981", border: "1px solid rgba(16,185,129,0.15)" }}>
-                      {`{{${f.key}}}`}
-                    </span>
-                  ))}
-                  {customVarCount(t) > 0 && (
-                    <span className="text-[9.5px] px-1.5 py-0.5 rounded" style={{ background: "rgba(108,99,255,0.08)", color: "#8B85FF", border: "1px solid rgba(108,99,255,0.15)" }}>
-                      {customVarCount(t)} custom field{customVarCount(t) !== 1 ? "s" : ""}
-                    </span>
+                {/* Status badge */}
+                <div className="flex items-center gap-2">
+                  <span
+                    className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                    style={{ background: sm.bg, color: sm.color, border: `1px solid ${sm.border}` }}
+                  >
+                    {sm.label}
+                  </span>
+                  {t.description && (
+                    <span className="text-[11px] truncate" style={{ color: "#8B95A7" }}>{t.description}</span>
                   )}
                 </div>
-              )}
 
-              <div className="flex items-center justify-between pt-2 border-t" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
-                <span className="text-[10.5px]" style={{ color: "#8B95A7" }}>
-                  Updated {new Date(t.updatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
-                </span>
-                <span className="text-[10.5px]" style={{ color: "#8B95A7" }}>Used {t.usageCount}×</span>
+                <p className="text-[12px] leading-relaxed line-clamp-3 font-mono" style={{ color: "#8B95A7" }}>{t.content}</p>
+
+                {/* Variable tags */}
+                {(t.fields ?? []).length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {(t.fields ?? []).filter(f => CONTACT_VARS.has(f.key)).map(f => (
+                      <span key={f.key} className="text-[9.5px] font-mono px-1.5 py-0.5 rounded" style={{ background: "rgba(16,185,129,0.08)", color: "#10B981", border: "1px solid rgba(16,185,129,0.15)" }}>
+                        {`{{${f.key}}}`}
+                      </span>
+                    ))}
+                    {customVarCount(t) > 0 && (
+                      <span className="text-[9.5px] px-1.5 py-0.5 rounded" style={{ background: "rgba(108,99,255,0.08)", color: "#8B85FF", border: "1px solid rgba(108,99,255,0.15)" }}>
+                        {customVarCount(t)} custom field{customVarCount(t) !== 1 ? "s" : ""}
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between pt-2 border-t" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
+                  <span className="text-[10.5px]" style={{ color: "#8B95A7" }}>
+                    Updated {new Date(t.updatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                  </span>
+                  <span className="text-[10.5px]" style={{ color: "#8B95A7" }}>Used {t.usageCount}×</span>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
 
           {filtered.length === 0 && !loading && (
             <div className="md:col-span-2 xl:col-span-3 text-center py-12 text-[13px]" style={{ color: "#8B95A7" }}>
-              {catFilter === "All" ? "No templates yet. Create your first one!" : `No templates in "${catFilter}".`}
+              {catFilter === "All" && statusFilter === "All"
+                ? "No templates yet. Create your first one!"
+                : `No templates match the selected filters.`}
             </div>
           )}
 
@@ -526,6 +712,16 @@ export default function TemplatesPage() {
           template={editing}
           onClose={() => { setModalOpen(false); setEditing(undefined); }}
           onSave={handleSave}
+        />
+      )}
+
+      {deleteTarget && (
+        <DeleteConfirmDialog
+          name={deleteTarget.name}
+          usageCount={deleteTarget.usageCount}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={handleDeleteConfirm}
+          deleting={deleting}
         />
       )}
     </div>

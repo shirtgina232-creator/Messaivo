@@ -763,7 +763,7 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
     if (tplSearch) params.set("search", tplSearch);
     Promise.all([
       fetch(`/api/broadcast-templates?${params}`).then(r => r.ok ? r.json() : null),
-      fetch(`/api/templates?limit=50${tplSearch ? `&search=${encodeURIComponent(tplSearch)}` : ""}`).then(r => r.ok ? r.json() : null),
+      fetch(`/api/templates?limit=50&status=active${tplSearch ? `&search=${encodeURIComponent(tplSearch)}` : ""}`).then(r => r.ok ? r.json() : null),
     ]).then(([global, user]) => {
       if (global?.templates) setGlobalTemplates(global.templates as GlobalTemplate[]);
       if (user?.templates) setUserTemplates(user.templates as UserTemplate[]);
