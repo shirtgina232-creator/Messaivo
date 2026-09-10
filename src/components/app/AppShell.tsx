@@ -407,7 +407,6 @@ function Sidebar() {
 
   const isActive = (href: string) => {
     if (href === "/app") return pathname === "/app";
-    // Both "Templates" and "Saved Replies" point to /app/templates — both get highlighted there
     return pathname.startsWith(href);
   };
 
@@ -542,7 +541,6 @@ const REQUIRES_PAGE = [
   "/app/inbox",
   "/app/broadcasts",
   "/app/groups",
-  "/app/templates",
   "/app/analytics",
 ];
 
