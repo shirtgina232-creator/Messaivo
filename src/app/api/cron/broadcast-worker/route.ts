@@ -138,7 +138,6 @@ export async function GET(request: Request) {
         pageId: true,
         message: true,
         messageTemplateId: true,
-        allowSubscriberSend: true,
         fieldValues: true,
         totalRecipients: true,
         sent: true,
@@ -146,7 +145,6 @@ export async function GET(request: Request) {
         ineligibleCount: true,
         skippedCount: true,
         creditsUsed: true,
-        messageTemplate: { select: { category: true } },
       },
     });
 
@@ -236,13 +234,6 @@ export async function GET(request: Request) {
     const rawTemplate = isUserTemplate ? broadcast.message : null;
     const customFieldValues = (broadcast.fieldValues ?? {}) as Record<string, string>;
 
-    // Allow subscriber-mode sends (messaging_type UPDATE) only when:
-    //   - broadcast.allowSubscriberSend is true
-    //   - the selected MessageTemplate has category "UTILITY"
-    // GlobalTemplate broadcasts always use RESPONSE (no category enforcement)
-    const isUtilityTemplate = broadcast.messageTemplate?.category === "UTILITY";
-    const canSendToSubscribersOutsideWindow = broadcast.allowSubscriberSend && isUtilityTemplate;
-
     // ── 7. Process each recipient ───────────────────────────────────────────
     const windowCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
@@ -278,29 +269,16 @@ export async function GET(request: Request) {
         continue;
       }
 
-      // Determine messaging window status
-      const withinWindow = !!(recipient.contact.lastMessageAt && recipient.contact.lastMessageAt >= windowCutoff);
-      const isSubscriber = !!recipient.contact.lastMessageAt; // has ever sent an inbound message to the page
-
-      let messagingType: "RESPONSE" | "UPDATE" = "RESPONSE";
-
-      if (!withinWindow) {
-        if (canSendToSubscribersOutsideWindow && isSubscriber) {
-          // Subscriber outside window + UTILITY template → UPDATE messaging
-          messagingType = "UPDATE";
-        } else {
-          // Outside window with no subscriber fallback → ineligible
-          ineligibleCount++;
-          failedCount++;
-          recipientUpdates.push({
-            id: recipient.id,
-            status: "failed",
-            failureReason: isSubscriber
-              ? "Outside 24-hour messaging window (subscriber send not enabled for this broadcast)"
-              : "Outside 24-hour messaging window — recipient has never messaged the Page",
-          });
-          continue;
-        }
+      // Enforce Meta's 24-hour messaging window
+      if (!recipient.contact.lastMessageAt || recipient.contact.lastMessageAt < windowCutoff) {
+        ineligibleCount++;
+        failedCount++;
+        recipientUpdates.push({
+          id: recipient.id,
+          status: "failed",
+          failureReason: "Outside 24-hour messaging window — recipient must message the Page first",
+        });
+        continue;
       }
 
       // Check per-send credit availability
@@ -333,7 +311,6 @@ export async function GET(request: Request) {
         page.pageId,
         recipient.contact.metaUserId,
         messageToSend,
-        messagingType,
       );
 
       // Rate-limit delay between API calls (Meta compliance)
@@ -354,7 +331,7 @@ export async function GET(request: Request) {
           recipientUpdates.push({
             id: recipient.id,
             status: "failed",
-            failureReason: `Outside messaging window (type=${messagingType}, Meta error: ${result.error.slice(0, 280)})`,
+            failureReason: `Outside 24-hour messaging window (Meta error: ${result.error.slice(0, 300)})`,
           });
         } else {
           // permanent or transient-but-unknown — mark failed
