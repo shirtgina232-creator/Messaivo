@@ -18,6 +18,7 @@ type ApiPage = {
   lastSyncedAt: string | null;
   scanStatus: string | null;
   lastScannedAt: string | null;
+  _count?: { contacts: number };
 };
 
 type ScanStats = {
@@ -562,31 +563,45 @@ export default function PagesPage() {
                   </div>
                 </div>
 
-                {/* Page name & status */}
-                <div className="text-[14px] font-semibold mb-1" style={{ color: "#F5F7FA" }}>{p.pageName}</div>
+                {/* Page name & category */}
+                <div className="text-[14px] font-semibold mb-0.5" style={{ color: "#F5F7FA" }}>{p.pageName}</div>
                 {p.pageCategory && (
-                  <div className="text-[11px] mb-1" style={{ color: "#8B95A7" }}>{p.pageCategory}</div>
+                  <div className="text-[11px] mb-2" style={{ color: "#8B95A7" }}>{p.pageCategory}</div>
                 )}
-                <div className="flex items-center gap-1.5 text-[11.5px] mb-2" style={{ color: "#10B981" }}>
-                  <span className="w-1.5 h-1.5 rounded-full bg-current" />
-                  Connected
+
+                {/* Status + customer count */}
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-1.5 text-[11.5px]" style={{ color: "#10B981" }}>
+                    <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                    Connected
+                  </div>
+                  {scanning ? (
+                    <span className="text-[11px] flex items-center gap-1" style={{ color: "#8B85FF" }}>
+                      <Loader2 size={9} className="animate-spin" />
+                      {progress && progress.conversations > 0
+                        ? `${progress.conversations.toLocaleString()} synced…`
+                        : "Scanning…"}
+                    </span>
+                  ) : (
+                    <div className="flex items-center gap-1 text-[11.5px]" style={{ color: p._count ? "#C4CDD8" : "#8B95A7" }}>
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                      </svg>
+                      {p._count !== undefined
+                        ? <span><strong style={{ color: "#F5F7FA" }}>{p._count.contacts.toLocaleString()}</strong> customers</span>
+                        : <span style={{ color: "#8B95A7" }}>Not scanned yet</span>}
+                    </div>
+                  )}
                 </div>
 
-                {/* Scan status row */}
-                {scanning ? (
-                  <div className="mt-auto pt-2 border-t" style={{ borderColor: "rgba(255,255,255,0.05)" }}>
-                    <span className="text-[11px]" style={{ color: "#8B85FF" }}>
-                      {progress && progress.conversations > 0
-                        ? `Scanning… ${progress.conversations} conversation${progress.conversations !== 1 ? "s" : ""} synced`
-                        : "Scanning for conversations…"}
-                    </span>
-                  </div>
-                ) : result ? (
+                {/* Scan status footer */}
+                {result ? (
                   <div className="mt-auto pt-2 border-t" style={{ borderColor: "rgba(255,255,255,0.05)" }}>
                     {result.error ? (
                       <span className="text-[11px]" style={{ color: "#EF4444" }}>
                         {result.nextCursor
-                          ? `Scan paused after ${result.stats.conversationsProcessed} conversation${result.stats.conversationsProcessed !== 1 ? "s" : ""} — click `
+                          ? `Paused after ${result.stats.conversationsProcessed} conversation${result.stats.conversationsProcessed !== 1 ? "s" : ""} — click `
                           : "Scan error: "}
                         {result.nextCursor
                           ? <><RefreshCw size={9} className="inline" /> to resume</>
@@ -594,7 +609,7 @@ export default function PagesPage() {
                       </span>
                     ) : (
                       <span className="text-[11px]" style={{ color: "#10B981" }}>
-                        Synced {result.stats.conversationsProcessed} conversation{result.stats.conversationsProcessed !== 1 ? "s" : ""},
+                        ✓ Synced {result.stats.conversationsProcessed} conversation{result.stats.conversationsProcessed !== 1 ? "s" : ""},
                         {" "}{result.stats.messagesInserted} new message{result.stats.messagesInserted !== 1 ? "s" : ""}
                       </span>
                     )}
