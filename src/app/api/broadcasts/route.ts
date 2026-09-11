@@ -58,7 +58,7 @@ export async function POST(req: Request) {
       return badRequest("Invalid JSON body");
     }
 
-    const { name, message, pageId, templateId, messageTemplateId, fieldValues, scheduledAt, contactIds, allPageContacts, allowSubscriberSend, messagingTag } = body as Record<string, unknown>;
+    const { name, message, pageId, templateId, messageTemplateId, customMessageContent, fieldValues, scheduledAt, contactIds, groupIds, allPageContacts, allowSubscriberSend, messagingTag } = body as Record<string, unknown>;
 
     // Validate messagingTag if provided
     const VALID_TAGS = new Set(["CONFIRMED_EVENT_UPDATE", "POST_PURCHASE_UPDATE", "ACCOUNT_UPDATE"]);
@@ -82,43 +82,25 @@ export async function POST(req: Request) {
     let resolvedMessageTemplateId: string | null = null;
 
     if (messageTemplateId && typeof messageTemplateId === "string") {
-      // User-template path: store raw content; render per-recipient at send time
+      // User-template path: store raw content; render per-recipient at send time.
+      // customMessageContent allows the user to edit the template before sending —
+      // the edited content is stored as broadcast.message; per-recipient variable
+      // substitution still runs because messageTemplateId is set.
       const tpl = await prisma.messageTemplate.findFirst({
         where: { id: messageTemplateId, workspaceId: ws.id },
         select: { id: true, name: true, content: true, fields: true },
       });
       if (!tpl) return badRequest("Template not found");
 
-      const fields = ((tpl.fields ?? []) as unknown) as TemplateField[];
-      const values = (typeof fieldValues === "object" && fieldValues !== null && !Array.isArray(fieldValues))
-        ? fieldValues as Record<string, string>
-        : {};
-
-      // Validate only custom (non-contact) fields — contact vars are auto-resolved at send time
-      const CONTACT_VARS = new Set(["first_name", "last_name", "name", "page_name"]);
-      const customFields = fields.filter(f => !CONTACT_VARS.has(f.key));
-      for (const field of customFields) {
-        const val = (values[field.key] ?? "").trim();
-        if (field.required && !val) {
-          return badRequest(`Field "${field.label}" is required`);
-        }
-        if (val && field.type === "URL") {
-          try { new URL(val); } catch { return badRequest(`Field "${field.label}" must be a valid URL (include https://)`); }
-        }
-        if (val && (field.type === "NUMBER" || field.type === "CURRENCY") && isNaN(Number(val))) {
-          return badRequest(`Field "${field.label}" must be a number`);
-        }
-        if (val && field.maxLength && val.length > field.maxLength) {
-          return badRequest(`Field "${field.label}" exceeds maximum length of ${field.maxLength} characters`);
-        }
-      }
+      // Use the user-edited content when provided, otherwise fall back to template content
+      const rawContent = (typeof customMessageContent === "string" && customMessageContent.trim())
+        ? customMessageContent.trim()
+        : tpl.content;
 
       // Store raw template — NOT pre-rendered; contact vars resolved per-recipient at send time
-      finalMessage = tpl.content;
+      finalMessage = rawContent;
       resolvedTemplateName = tpl.name;
-      resolvedFieldValues = Object.fromEntries(
-        Object.entries(values).filter(([k]) => !CONTACT_VARS.has(k))
-      );
+      resolvedFieldValues = {};
       resolvedMessageTemplateId = tpl.id;
 
       // Increment usage count
@@ -171,7 +153,7 @@ export async function POST(req: Request) {
       return badRequest("Either messageTemplateId, templateId, or message is required");
     }
 
-    // Resolve recipient contact IDs — either all page contacts or an explicit list
+    // Resolve recipient contact IDs — all page contacts, specific groups, or explicit list
     const validContactIds: string[] = [];
     if (allPageContacts === true && typeof pageId === "string") {
       const pageContacts = await prisma.contact.findMany({
@@ -179,6 +161,16 @@ export async function POST(req: Request) {
         select: { id: true },
       });
       pageContacts.forEach(c => validContactIds.push(c.id));
+    } else if (Array.isArray(groupIds) && groupIds.length > 0) {
+      const validGroupIds = (groupIds as unknown[]).filter((x): x is string => typeof x === "string");
+      if (validGroupIds.length > 0) {
+        const members = await prisma.contactGroupMember.findMany({
+          where: { groupId: { in: validGroupIds }, contact: { workspaceId: ws.id } },
+          select: { contactId: true },
+        });
+        const uniqueIds = [...new Set(members.map(m => m.contactId))];
+        uniqueIds.forEach(id => validContactIds.push(id));
+      }
     } else if (Array.isArray(contactIds) && contactIds.length > 0) {
       const ids = (contactIds as unknown[]).filter((x): x is string => typeof x === "string");
       if (ids.length > 0) {

@@ -338,50 +338,59 @@ function Row({ label, value }: { label: string; value: string }) {
 
 // ── New Broadcast Slide Panel ──────────────────────────────────────────────────
 
+// Renders message text with sample contact variables substituted for preview
+function renderPreview(text: string, pageName: string): string {
+  const samples: Record<string, string> = {
+    first_name: "John", last_name: "Doe", name: "John Doe", page_name: pageName,
+  };
+  return text.replace(/\{\{(\w+)\}\}/g, (_, k) => samples[k] ?? `{{${k}}}`);
+}
+
 function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const { pages } = useWorkspace();
 
-  // Form state
-  const [pageId, setPageId] = useState(pages[0]?.id ?? "");
+  // Step 1 — basic info
   const [broadcastName, setBroadcastName] = useState("");
+  const [pageId, setPageId] = useState(pages[0]?.id ?? "");
+
+  // Step 2 — audience
   const [recipientMode, setRecipientMode] = useState<"all" | "groups">("all");
   const [groups, setGroups] = useState<GroupItem[]>([]);
   const [selectedGroups, setSelectedGroups] = useState<Set<string>>(new Set());
   const [groupsLoading, setGroupsLoading] = useState(false);
 
-  // Message
+  // Reachable count (live, from eligibility-check)
+  const [reachable, setReachable] = useState<{ total: number; eligible: number } | null>(null);
+  const [reachableLoading, setReachableLoading] = useState(false);
+
+  // Step 3 — message
   const [messageMode, setMessageMode] = useState<"template" | "custom">("template");
   const [templates, setTemplates] = useState<AvailableTemplate[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(true);
   const [selectedTemplate, setSelectedTemplate] = useState<AvailableTemplate | null>(null);
   const [templateSearch, setTemplateSearch] = useState("");
-  const [customMessage, setCustomMessage] = useState("");
-  const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
+  // Unified editable message text (loaded from template or typed from scratch)
+  const [messageText, setMessageText] = useState("");
 
-  // Schedule
+  // Step 4 — schedule
   const [scheduleMode, setScheduleMode] = useState<"now" | "later">("now");
   const [schedDate, setSchedDate] = useState("");
 
-  // Submit
+  // Submit state
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
-  // Recipient count estimate
-  const [recipientEst, setRecipientEst] = useState<number | null>(null);
-
-  // Load templates
+  // ── Load templates ─────────────────────────────────────────────────────────
   useEffect(() => {
     setTemplatesLoading(true);
-    const q = new URLSearchParams();
-    if (templateSearch) q.set("search", templateSearch);
-    fetch(`/api/broadcast-templates?${q}`)
+    fetch(`/api/broadcast-templates?${templateSearch ? `search=${encodeURIComponent(templateSearch)}` : ""}`)
       .then(r => r.ok ? r.json() : null)
       .then((d: { templates?: AvailableTemplate[] } | null) => { if (d?.templates) setTemplates(d.templates); })
       .catch(() => {})
       .finally(() => setTemplatesLoading(false));
   }, [templateSearch]);
 
-  // Load groups
+  // ── Load groups ────────────────────────────────────────────────────────────
   useEffect(() => {
     if (recipientMode !== "groups") return;
     setGroupsLoading(true);
@@ -392,37 +401,55 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
       .finally(() => setGroupsLoading(false));
   }, [recipientMode]);
 
-  // Reset field values when template changes
+  // ── Load template content into editable editor when template is selected ──
   useEffect(() => {
-    if (!selectedTemplate) { setFieldValues({}); return; }
-    const init: Record<string, string> = {};
-    const CONTACT_VARS = new Set(["first_name", "last_name", "name", "page_name"]);
-    for (const f of (selectedTemplate.fields ?? [])) {
-      if (!CONTACT_VARS.has(f.key)) init[f.key] = "";
+    if (selectedTemplate) {
+      setMessageText(selectedTemplate.content);
     }
-    setFieldValues(init);
   }, [selectedTemplate?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Estimate recipients for display
+  // ── Clear editor when switching modes ─────────────────────────────────────
   useEffect(() => {
-    if (!pageId) { setRecipientEst(null); return; }
-    fetch(`/api/broadcasts/eligibility-check`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pageId }),
-    })
-      .then(r => r.ok ? r.json() : null)
-      .then((d: { total?: number } | null) => setRecipientEst(d?.total ?? null))
-      .catch(() => {});
-  }, [pageId]);
+    if (messageMode === "custom") {
+      setSelectedTemplate(null);
+      setMessageText("");
+    }
+  }, [messageMode]);
 
-  const CONTACT_VARS = new Set(["first_name", "last_name", "name", "page_name"]);
-  const customFields = selectedTemplate?.fields?.filter(f => !CONTACT_VARS.has(f.key)) ?? [];
-  const unfilledRequired = customFields.filter(f => f.required && !(fieldValues[f.key] ?? "").trim());
+  // ── Live reachable count — updates on page + audience changes ─────────────
+  const reachableTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!pageId) { setReachable(null); return; }
+    if (reachableTimerRef.current) clearTimeout(reachableTimerRef.current);
+    reachableTimerRef.current = setTimeout(async () => {
+      setReachableLoading(true);
+      try {
+        const body: Record<string, unknown> = { pageId };
+        if (recipientMode === "groups" && selectedGroups.size > 0) {
+          body.groupIds = [...selectedGroups];
+        }
+        const res = await fetch("/api/broadcasts/eligibility-check", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+        });
+        if (res.ok) {
+          const d = await res.json() as { total: number; windowOpen: number };
+          setReachable({ total: d.total, eligible: d.windowOpen });
+        }
+      } catch { /* ignore */ }
+      finally { setReachableLoading(false); }
+    }, 400);
+    return () => { if (reachableTimerRef.current) clearTimeout(reachableTimerRef.current); };
+  }, [pageId, recipientMode, selectedGroups]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const canSend = !!pageId && !!broadcastName.trim() &&
-    (messageMode === "custom" ? !!customMessage.trim() : (!!selectedTemplate && unfilledRequired.length === 0)) &&
-    (scheduleMode === "now" || (scheduleMode === "later" && !!schedDate)) &&
+  const selectedPage = pages.find(p => p.id === pageId);
+  const previewRendered = messageText ? renderPreview(messageText, selectedPage?.name ?? "Your Page") : "";
+
+  const filteredTemplates = templates.filter(t =>
+    !templateSearch || t.name.toLowerCase().includes(templateSearch.toLowerCase())
+  );
+
+  const canSend = !!pageId && !!broadcastName.trim() && !!messageText.trim() &&
+    (scheduleMode === "now" || !!schedDate) &&
     (recipientMode === "all" || selectedGroups.size > 0);
 
   const handleSend = useCallback(async (mode: "send" | "draft") => {
@@ -432,23 +459,27 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
       const body: Record<string, unknown> = {
         name: broadcastName.trim(),
         pageId,
-        fieldValues,
       };
 
       if (messageMode === "template" && selectedTemplate) {
-        if (selectedTemplate.source === "global") body.templateId = selectedTemplate.id;
-        else body.messageTemplateId = selectedTemplate.id;
+        if (selectedTemplate.source === "global") {
+          body.templateId = selectedTemplate.id;
+          // For global templates, send pre-filled message directly
+          body.message = messageText.trim();
+        } else {
+          // User template — keep templateId for per-recipient variable resolution
+          // customMessageContent carries the (possibly edited) content
+          body.messageTemplateId = selectedTemplate.id;
+          body.customMessageContent = messageText.trim();
+        }
       } else {
-        body.message = customMessage.trim();
+        body.message = messageText.trim();
       }
 
       if (recipientMode === "all") {
         body.allPageContacts = true;
       } else {
-        // groups → will be resolved by eligibility check on send; pass group ids
-        // For now send all groups as contacts via a groups resolution
         body.groupIds = [...selectedGroups];
-        body.allPageContacts = false;
       }
 
       if (mode === "send" && scheduleMode === "later" && schedDate) {
@@ -467,7 +498,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
       if (mode === "draft") { onCreated(); onClose(); return; }
       if (scheduleMode === "later") { onCreated(); onClose(); return; }
 
-      // Send now
+      // Kick off send
       const sendRes = await fetch(`/api/broadcasts/${broadcast.id}/send`, { method: "POST" });
       if (!sendRes.ok) {
         const d = await sendRes.json() as { error?: string };
@@ -476,11 +507,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
       onCreated(); onClose();
     } catch { setError("Network error. Please try again."); }
     finally { setSubmitting(false); }
-  }, [pageId, broadcastName, fieldValues, messageMode, selectedTemplate, customMessage, recipientMode, selectedGroups, scheduleMode, schedDate, onCreated, onClose]);
-
-  const filteredTemplates = templates.filter(t =>
-    !templateSearch || t.name.toLowerCase().includes(templateSearch.toLowerCase())
-  );
+  }, [pageId, broadcastName, messageMode, selectedTemplate, messageText, recipientMode, selectedGroups, scheduleMode, schedDate, onCreated, onClose]);
 
   return (
     <div className="fixed inset-0 z-50 flex">
@@ -506,16 +533,16 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
         {/* Body */}
         <div className="flex-1 overflow-y-auto px-6 py-5 flex flex-col gap-5">
 
-          {/* Broadcast name */}
+          {/* ① Broadcast Name */}
           <FormSection label="Broadcast Name">
             <input value={broadcastName} onChange={e => setBroadcastName(e.target.value)}
-              placeholder="e.g. September Promotion"
+              placeholder="e.g. September Notification"
               className="w-full px-3 py-2.5 rounded-lg text-[13px] outline-none"
               style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" }} />
             <p className="text-[11px] mt-1" style={{ color: "#8B95A7" }}>Internal name — not visible to recipients.</p>
           </FormSection>
 
-          {/* Select Page */}
+          {/* ② Select Page + reachable count */}
           <FormSection label="Select Page">
             <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
               {pages.map(p => (
@@ -527,25 +554,37 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
                     color: pageId === p.id ? "#F5F7FA" : "#C4CDD8",
                   }}>
                   <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0"
-                    style={{ background: p.color ?? "#6C63FF" }}>
-                    {p.avatar ?? p.name.slice(0, 2).toUpperCase()}
+                    style={{ background: (p as { color?: string }).color ?? "#6C63FF" }}>
+                    {(p as { avatar?: string }).avatar ?? p.name.slice(0, 2).toUpperCase()}
                   </div>
                   <span className="truncate font-medium">{p.name}</span>
                 </button>
               ))}
             </div>
-            {recipientEst !== null && (
-              <p className="text-[11.5px] mt-1.5 flex items-center gap-1" style={{ color: "#8B95A7" }}>
-                <Users size={11} /> {recipientEst.toLocaleString()} contacts reachable now
-              </p>
-            )}
+            {/* Real reachable count */}
+            <div className="mt-2 flex items-center gap-1.5 min-h-[18px]">
+              {reachableLoading ? (
+                <span className="flex items-center gap-1 text-[11.5px]" style={{ color: "#8B95A7" }}>
+                  <Loader2 size={10} className="animate-spin" /> Counting subscribers…
+                </span>
+              ) : reachable !== null ? (
+                <span className="flex items-center gap-1 text-[11.5px]" style={{ color: "#8B95A7" }}>
+                  <Users size={11} />
+                  <strong style={{ color: "#F5F7FA" }}>{reachable.total.toLocaleString()}</strong> contacts
+                  {reachable.eligible > 0 && reachable.eligible < reachable.total && (
+                    <span> · <strong style={{ color: "#10B981" }}>{reachable.eligible.toLocaleString()}</strong> in 24h window</span>
+                  )}
+                  {reachable.total > 0 && " reachable now"}
+                </span>
+              ) : null}
+            </div>
           </FormSection>
 
-          {/* Recipients */}
+          {/* ③ Audience */}
           <FormSection label="Send To">
             <div className="flex gap-2">
               {([["all", "All Subscribers"], ["groups", "Specific Groups"]] as const).map(([mode, label]) => (
-                <button key={mode} onClick={() => setRecipientMode(mode)}
+                <button key={mode} onClick={() => { setRecipientMode(mode); setSelectedGroups(new Set()); }}
                   className="flex-1 py-2 rounded-lg text-[12.5px] font-medium transition-colors"
                   style={{
                     background: recipientMode === mode ? "rgba(108,99,255,0.12)" : "rgba(255,255,255,0.03)",
@@ -566,16 +605,17 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
                   <p className="p-3 text-[12px]" style={{ color: "#8B95A7" }}>No groups found. Create groups first.</p>
                 ) : (
                   groups.map((g, i) => (
-                    <button key={g.id} onClick={() => setSelectedGroups(prev => {
-                      const next = new Set(prev);
-                      next.has(g.id) ? next.delete(g.id) : next.add(g.id);
-                      return next;
-                    })}
+                    <button key={g.id}
+                      onClick={() => setSelectedGroups(prev => {
+                        const next = new Set(prev);
+                        next.has(g.id) ? next.delete(g.id) : next.add(g.id);
+                        return next;
+                      })}
                       className="w-full flex items-center justify-between px-3 py-2.5 text-left transition-colors hover:bg-white/[0.02]"
                       style={{ borderTop: i > 0 ? "1px solid rgba(255,255,255,0.05)" : "none" }}>
                       <span className="text-[12.5px]" style={{ color: "#C4CDD8" }}>{g.name}</span>
                       <div className="flex items-center gap-2">
-                        {g._count && <span className="text-[11px]" style={{ color: "#8B95A7" }}>{g._count.members.toLocaleString()}</span>}
+                        {g._count && <span className="text-[11px]" style={{ color: "#8B95A7" }}>{g._count.members.toLocaleString()} members</span>}
                         <div className="w-4 h-4 rounded flex items-center justify-center"
                           style={{ background: selectedGroups.has(g.id) ? "#6C63FF" : "rgba(255,255,255,0.07)", border: `1px solid ${selectedGroups.has(g.id) ? "#6C63FF" : "rgba(255,255,255,0.15)"}` }}>
                           {selectedGroups.has(g.id) && <CheckCircle2 size={10} style={{ color: "#fff" }} />}
@@ -588,11 +628,11 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
             )}
           </FormSection>
 
-          {/* Message */}
+          {/* ④ Message mode tabs */}
           <FormSection label="Message">
             <div className="flex gap-2 mb-3">
               {([["template", "Use Template", <FileText key="t" size={12} />], ["custom", "Write Message", <MessageSquare key="m" size={12} />]] as const).map(([mode, label, icon]) => (
-                <button key={mode} onClick={() => setMessageMode(mode)}
+                <button key={mode} onClick={() => setMessageMode(mode as "template" | "custom")}
                   className="flex items-center gap-1.5 flex-1 justify-center py-2 rounded-lg text-[12.5px] font-medium"
                   style={{
                     background: messageMode === mode ? "rgba(108,99,255,0.12)" : "rgba(255,255,255,0.03)",
@@ -604,8 +644,9 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
               ))}
             </div>
 
-            {messageMode === "template" ? (
-              <div className="flex flex-col gap-2">
+            {/* Template picker — shown only in template mode and before template is selected */}
+            {messageMode === "template" && (
+              <div className="flex flex-col gap-2 mb-3">
                 <div className="relative">
                   <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#8B95A7" }} />
                   <input value={templateSearch} onChange={e => setTemplateSearch(e.target.value)}
@@ -613,16 +654,16 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
                     className="w-full pl-8 pr-3 py-2 rounded-lg text-[12.5px] outline-none"
                     style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", color: "#F5F7FA" }} />
                 </div>
-                <div className="flex flex-col gap-1.5 max-h-52 overflow-y-auto pr-1">
+                <div className="flex flex-col gap-1.5 max-h-44 overflow-y-auto pr-1">
                   {templatesLoading ? (
-                    <div className="flex items-center gap-2 py-4 justify-center text-[12px]" style={{ color: "#8B95A7" }}>
+                    <div className="flex items-center gap-2 py-3 justify-center text-[12px]" style={{ color: "#8B95A7" }}>
                       <Loader2 size={12} className="animate-spin" /> Loading templates…
                     </div>
                   ) : filteredTemplates.length === 0 ? (
-                    <p className="py-4 text-center text-[12px]" style={{ color: "#8B95A7" }}>No approved templates available.</p>
+                    <p className="py-3 text-center text-[12px]" style={{ color: "#8B95A7" }}>No approved templates available.</p>
                   ) : (
                     filteredTemplates.map(t => (
-                      <button key={t.id} onClick={() => setSelectedTemplate(t)}
+                      <button key={t.id} onClick={() => setSelectedTemplate(t === selectedTemplate ? null : t)}
                         className="flex flex-col gap-0.5 text-left px-3 py-2.5 rounded-lg transition-colors"
                         style={{
                           background: selectedTemplate?.id === t.id ? "rgba(108,99,255,0.12)" : "rgba(255,255,255,0.03)",
@@ -634,54 +675,74 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
                             style={{ background: t.source === "global" ? "rgba(16,185,129,0.12)" : "rgba(108,99,255,0.12)", color: t.source === "global" ? "#10B981" : "#8B85FF" }}>
                             {t.source === "global" ? "Platform" : "Custom"}
                           </span>
+                          {selectedTemplate?.id === t.id && (
+                            <span className="ml-auto text-[10px]" style={{ color: "#6C63FF" }}>Selected ✓</span>
+                          )}
                         </div>
                         {t.description && <span className="text-[11px]" style={{ color: "#8B95A7" }}>{t.description}</span>}
                       </button>
                     ))
                   )}
                 </div>
+              </div>
+            )}
 
-                {/* Variable fields for selected template */}
-                {selectedTemplate && customFields.length > 0 && (
-                  <div className="mt-2 flex flex-col gap-3 pt-3" style={{ borderTop: "1px solid rgba(255,255,255,0.07)" }}>
-                    <p className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "#8B95A7" }}>Fill in template variables</p>
-                    {customFields.map(f => (
-                      <div key={f.key}>
-                        <label className="text-[11.5px] font-medium block mb-1" style={{ color: "#C4CDD8" }}>
-                          {f.label}{f.required && <span style={{ color: "#EF4444" }}> *</span>}
-                        </label>
-                        {f.type === "DROPDOWN" && f.options?.length ? (
-                          <select value={fieldValues[f.key] ?? ""} onChange={e => setFieldValues(p => ({ ...p, [f.key]: e.target.value }))}
-                            className="w-full px-3 py-2 rounded-lg text-[12.5px] outline-none"
-                            style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" }}>
-                            <option value="">Select…</option>
-                            {f.options.map(o => <option key={o} value={o}>{o}</option>)}
-                          </select>
-                        ) : f.type === "TEXTAREA" ? (
-                          <textarea rows={3} value={fieldValues[f.key] ?? ""} onChange={e => setFieldValues(p => ({ ...p, [f.key]: e.target.value }))}
-                            className="w-full px-3 py-2 rounded-lg text-[12.5px] outline-none resize-none"
-                            style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" }} />
-                        ) : (
-                          <input type={f.type === "DATE" ? "date" : f.type === "URL" ? "url" : "text"}
-                            value={fieldValues[f.key] ?? ""} onChange={e => setFieldValues(p => ({ ...p, [f.key]: e.target.value }))}
-                            className="w-full px-3 py-2 rounded-lg text-[12.5px] outline-none"
-                            style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" }} />
-                        )}
-                      </div>
-                    ))}
-                  </div>
+            {/* Editable message editor — shown always (auto-populated from template, or empty for custom) */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "#8B95A7" }}>
+                  {selectedTemplate ? `Editing: ${selectedTemplate.name}` : "Message Content"}
+                </label>
+                {selectedTemplate && (
+                  <button onClick={() => { setSelectedTemplate(null); setMessageText(""); }}
+                    className="text-[10.5px] flex items-center gap-1" style={{ color: "#8B95A7" }}>
+                    <X size={10} /> Clear template
+                  </button>
                 )}
               </div>
-            ) : (
               <textarea
-                value={customMessage} onChange={e => setCustomMessage(e.target.value)}
-                rows={5} placeholder="Type your message here…"
-                className="w-full px-3 py-2.5 rounded-lg text-[13px] outline-none resize-none"
-                style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" }} />
+                value={messageText}
+                onChange={e => setMessageText(e.target.value)}
+                rows={5}
+                placeholder={messageMode === "template" ? "Select a template above to load its content…" : "Type your message here…"}
+                className="w-full px-3 py-2.5 rounded-lg text-[13px] outline-none resize-y leading-relaxed"
+                style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA", minHeight: 100 }} />
+              <p className="text-[10.5px] mt-1" style={{ color: "rgba(139,149,167,0.6)" }}>
+                Variables like <code style={{ color: "#8B85FF" }}>{"{{first_name}}"}</code> are auto-filled per recipient at send time.
+              </p>
+            </div>
+
+            {/* ⑤ Live message preview */}
+            {previewRendered && (
+              <div className="rounded-xl overflow-hidden mt-1"
+                style={{ border: "1px solid rgba(255,255,255,0.07)" }}>
+                <div className="px-3 py-2 flex items-center gap-1.5"
+                  style={{ background: "rgba(255,255,255,0.03)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                  <MessageSquare size={11} style={{ color: "#8B95A7" }} />
+                  <span className="text-[10.5px] font-semibold uppercase tracking-wider" style={{ color: "#8B95A7" }}>Message Preview</span>
+                  <span className="ml-auto text-[10px]" style={{ color: "rgba(139,149,167,0.5)" }}>Sample: John Doe</span>
+                </div>
+                <div className="px-4 py-3">
+                  {/* Messenger-style bubble */}
+                  <div className="flex items-end gap-2">
+                    <div className="w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
+                      style={{ background: selectedPage ? ((selectedPage as { color?: string }).color ?? "#6C63FF") : "#6C63FF", color: "#fff" }}>
+                      {selectedPage?.name.slice(0, 1).toUpperCase() ?? "P"}
+                    </div>
+                    <div className="max-w-xs px-3 py-2 rounded-2xl rounded-bl-sm text-[13px] leading-relaxed whitespace-pre-wrap"
+                      style={{ background: "rgba(255,255,255,0.08)", color: "#F5F7FA", border: "1px solid rgba(255,255,255,0.06)" }}>
+                      {previewRendered}
+                    </div>
+                  </div>
+                  <p className="text-[10px] mt-2 ml-8" style={{ color: "rgba(139,149,167,0.5)" }}>
+                    Delivered · Just now
+                  </p>
+                </div>
+              </div>
             )}
           </FormSection>
 
-          {/* Schedule */}
+          {/* ⑥ Schedule */}
           <FormSection label="Schedule (Optional)">
             <div className="flex gap-2 mb-2">
               {([["now", "Send Now"], ["later", "Schedule"]] as const).map(([m, l]) => (

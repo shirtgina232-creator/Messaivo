@@ -11,7 +11,7 @@ export async function POST(req: Request) {
     let body: unknown;
     try { body = await req.json(); } catch { return badRequest("Invalid JSON body"); }
 
-    const { pageId, contactIds, messagingTag } = body as Record<string, unknown>;
+    const { pageId, contactIds, groupIds, messagingTag } = body as Record<string, unknown>;
     if (!pageId || typeof pageId !== "string") return badRequest("pageId is required");
 
     // messagingTag is optional — when provided, switches eligibility to MESSAGE_TAG rules.
@@ -28,7 +28,21 @@ export async function POST(req: Request) {
 
     let contacts: Array<{ isSubscribed: boolean; lastMessageAt: Date | null }>;
 
-    if (Array.isArray(contactIds) && contactIds.length > 0) {
+    if (Array.isArray(groupIds) && groupIds.length > 0) {
+      // Resolve unique contact IDs from the specified groups
+      const validGroupIds = (groupIds as unknown[]).filter((x): x is string => typeof x === "string");
+      const members = await prisma.contactGroupMember.findMany({
+        where: { groupId: { in: validGroupIds }, contact: { workspaceId: ws.id } },
+        select: { contactId: true },
+      });
+      const uniqueIds = [...new Set(members.map(m => m.contactId))];
+      contacts = uniqueIds.length > 0
+        ? await prisma.contact.findMany({
+            where: { id: { in: uniqueIds }, workspaceId: ws.id },
+            select: { isSubscribed: true, lastMessageAt: true },
+          })
+        : [];
+    } else if (Array.isArray(contactIds) && contactIds.length > 0) {
       const ids = (contactIds as unknown[]).filter((x): x is string => typeof x === "string");
       contacts = await prisma.contact.findMany({
         where: { id: { in: ids }, workspaceId: ws.id },
