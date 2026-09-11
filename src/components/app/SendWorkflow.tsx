@@ -56,16 +56,42 @@ interface EligibilityResult {
   total: number;
   // Granular breakdown
   windowOpen: number;         // Subscribed + inbound msg within 24 h → eligible for RESPONSE
-  windowClosed: number;       // Subscribed + inbound msg but >24 h ago → CANNOT send
-  neverMessaged: number;      // Subscribed + no inbound msg on record → CANNOT send
-  unsubscribed: number;       // Opted out → CANNOT send
-  eligibleForMethod: number;  // Can receive this message right now (= windowOpen for RESPONSE)
-  cannotSend: number;         // Everyone else
-  // Legacy aliases (kept for backwards compat with older send routes)
+  windowClosed: number;       // Subscribed + inbound msg but >24 h ago
+  neverMessaged: number;      // Subscribed + no inbound msg on record (higher error risk)
+  unsubscribed: number;       // Opted out → never eligible
+  eligibleForMethod: number;  // windowOpen for RESPONSE; windowOpen+windowClosed for MESSAGE_TAG
+  atRisk: number;             // neverMessaged contacts when using MESSAGE_TAG (may get #551)
+  cannotSend: number;         // Contacts that cannot receive the message
+  messagingMethod?: "RESPONSE" | "MESSAGE_TAG";
+  messagingTag?: string | null;
+  // Legacy aliases
   eligible: number;
   ineligible: number;
   skipped: number;
 }
+
+// MESSAGE_TAG definitions — content must genuinely match the selected tag.
+const MESSAGE_TAG_OPTIONS = [
+  {
+    value: "CONFIRMED_EVENT_UPDATE",
+    label: "Event Update",
+    description: "Reminders and updates for events the recipient has registered for (appointments, classes, reservations).",
+    example: "Your appointment tomorrow at 3 PM is confirmed.",
+  },
+  {
+    value: "POST_PURCHASE_UPDATE",
+    label: "Purchase Update",
+    description: "Order confirmations, shipping notifications, and receipts for an actual recent purchase.",
+    example: "Your order #1234 has shipped and will arrive Thursday.",
+  },
+  {
+    value: "ACCOUNT_UPDATE",
+    label: "Account Notification",
+    description: "Non-recurring notifications about the recipient's account or service (password change, form status, payment update).",
+    example: "Your password was changed. Contact us if this wasn't you.",
+  },
+] as const;
+type MessageTagValue = typeof MESSAGE_TAG_OPTIONS[number]["value"];
 
 type RecipientMode = "all" | "contacts" | "groups";
 
@@ -319,10 +345,11 @@ function MessagingStatusPanel({ eligibility, eligibilityLoading, emptyReason, co
     );
   }
 
-  const { total, windowOpen, windowClosed, neverMessaged, unsubscribed, eligibleForMethod, cannotSend } = eligibility;
+  const { total, windowOpen, windowClosed, neverMessaged, unsubscribed, eligibleForMethod, atRisk = 0, cannotSend } = eligibility;
+  const isMessageTag = eligibility.messagingMethod === "MESSAGE_TAG";
+  const tagDef = isMessageTag ? MESSAGE_TAG_OPTIONS.find(t => t.value === eligibility.messagingTag) : null;
 
-  // Per-row config
-  type RowDef = { label: string; value: number; color: string; bg: string; border: string; note: string };
+  type RowDef = { label: string; value: number; color: string; bg: string; border: string; note: string; hide?: boolean };
   const rows: RowDef[] = [
     {
       label: "Total Selected Contacts",
@@ -331,36 +358,49 @@ function MessagingStatusPanel({ eligibility, eligibilityLoading, emptyReason, co
       bg: "rgba(255,255,255,0.03)",
       border: "rgba(255,255,255,0.07)",
       note: "All contacts in this audience selection.",
+      hide: compact,
     },
     {
-      label: "Contacts Available for Standard Messaging",
+      label: "Contacts in Active 24-Hour Window",
       value: windowOpen,
       color: "#10B981",
       bg: "rgba(16,185,129,0.05)",
       border: "rgba(16,185,129,0.15)",
-      note: "These contacts sent a message to your Page within the last 24 hours, opening the standard Messenger response window (messaging_type: RESPONSE).",
+      note: "Sent a message to your Page within the last 24 hours. Eligible for RESPONSE messaging.",
     },
     {
-      label: "Contacts Outside Standard Messaging Window",
-      value: windowClosed + neverMessaged,
+      label: isMessageTag ? "Contacts Eligible via Message Tag" : "Contacts Outside the Messaging Window",
+      value: isMessageTag ? windowClosed : windowClosed + neverMessaged,
+      color: isMessageTag ? "#10B981" : "#F59E0B",
+      bg: isMessageTag ? "rgba(16,185,129,0.05)" : "rgba(245,158,11,0.05)",
+      border: isMessageTag ? "rgba(16,185,129,0.15)" : "rgba(245,158,11,0.15)",
+      note: isMessageTag
+        ? `Window expired but eligible for ${tagDef?.label ?? "Message Tag"} notifications. No 24-hour restriction applies for this tag.`
+        : windowClosed > 0 && neverMessaged > 0
+          ? `${windowClosed.toLocaleString()} had an active window that has since expired. ${neverMessaged.toLocaleString()} have never sent a message to this Page.`
+          : windowClosed > 0
+            ? `${windowClosed.toLocaleString()} had a previous conversation, but the 24-hour window has closed.`
+            : `${neverMessaged.toLocaleString()} have never sent a message to this Page — no messaging window has ever been opened.`,
+    },
+    ...(isMessageTag && atRisk > 0 ? [{
+      label: "At-Risk Contacts (no prior conversation)",
+      value: atRisk,
       color: "#F59E0B",
       bg: "rgba(245,158,11,0.05)",
       border: "rgba(245,158,11,0.15)",
-      note: windowClosed > 0 && neverMessaged > 0
-        ? `${windowClosed.toLocaleString()} had an active window that has since expired. ${neverMessaged.toLocaleString()} have never sent a message to this Page.`
-        : windowClosed > 0
-        ? `${windowClosed.toLocaleString()} had a previous conversation, but the 24-hour window has closed.`
-        : `${neverMessaged.toLocaleString()} have never sent a message to this Page — no messaging window has ever been opened.`,
-    },
+      note: `${atRisk.toLocaleString()} contact${atRisk !== 1 ? "s have" : " has"} never sent a message to your Page. Their PSID may not be properly anchored to this Page conversation, which can result in Meta error #551 ("This person isn't available right now"). These contacts are included in the send attempt but may fail.`,
+    }] : []),
     {
-      label: "Contacts Eligible for the Selected Messaging Method",
+      label: `Contacts Eligible for ${isMessageTag ? `Message Tag (${tagDef?.label ?? eligibility.messagingTag})` : "RESPONSE Messaging"}`,
       value: eligibleForMethod,
       color: eligibleForMethod > 0 ? "#8B85FF" : "#EF4444",
       bg: eligibleForMethod > 0 ? "rgba(108,99,255,0.06)" : "rgba(239,68,68,0.05)",
       border: eligibleForMethod > 0 ? "rgba(108,99,255,0.2)" : "rgba(239,68,68,0.15)",
       note: eligibleForMethod > 0
-        ? `${eligibleForMethod.toLocaleString()} contact${eligibleForMethod !== 1 ? "s are" : " is"} eligible to receive this message now. Messaging method: RESPONSE (24-hour window). 1 credit is charged per successfully delivered message.`
-        : "No contacts are currently eligible. The selected messaging method (RESPONSE) requires recipients to have sent a message to your Page within the last 24 hours. No alternative sending method is available in this application.",
+        ? `${eligibleForMethod.toLocaleString()} contact${eligibleForMethod !== 1 ? "s" : ""} can receive this message. 1 credit per successfully delivered message.`
+        : isMessageTag
+          ? "No subscribed contacts found. All contacts appear to be opted out."
+          : "None of the selected contacts have an active 24-hour Messenger window. They must send a message to your Page first. No alternative method is available for RESPONSE messaging.",
     },
     {
       label: "Contacts That Cannot Be Sent To",
@@ -370,46 +410,59 @@ function MessagingStatusPanel({ eligibility, eligibilityLoading, emptyReason, co
       border: cannotSend > 0 ? "rgba(239,68,68,0.12)" : "rgba(16,185,129,0.1)",
       note: cannotSend === 0
         ? "All selected contacts can receive this message."
-        : [
-            windowClosed > 0 ? `${windowClosed.toLocaleString()} window expired` : "",
-            neverMessaged > 0 ? `${neverMessaged.toLocaleString()} never messaged page` : "",
-            unsubscribed > 0 ? `${unsubscribed.toLocaleString()} opted out` : "",
-          ].filter(Boolean).join(" · ") + ". These contacts will be skipped at send time. No credits are charged for skipped contacts.",
+        : (isMessageTag
+            ? [unsubscribed > 0 ? `${unsubscribed.toLocaleString()} opted out` : ""].filter(Boolean).join(" · ")
+            : [
+                windowClosed > 0 ? `${windowClosed.toLocaleString()} window expired` : "",
+                neverMessaged > 0 ? `${neverMessaged.toLocaleString()} never messaged page` : "",
+                unsubscribed > 0 ? `${unsubscribed.toLocaleString()} opted out` : "",
+              ].filter(Boolean).join(" · ")
+          ) + ". These contacts will be skipped. No credits charged for skipped contacts.",
     },
   ];
 
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-widest" style={{ color: "#8B95A7" }}>
-        <ShieldCheck size={12} style={{ color: "#8B85FF" }} />
-        Messaging Status · RESPONSE method · 24-hour window
+        <ShieldCheck size={12} style={{ color: isMessageTag ? "#F59E0B" : "#8B85FF" }} />
+        Messaging Status · {isMessageTag ? `MESSAGE_TAG · ${tagDef?.label ?? eligibility.messagingTag}` : "RESPONSE · 24-hour window"}
       </div>
 
-      {rows.map(row => (
-        compact && row.label === "Total Selected Contacts" ? null : (
-          <div key={row.label} className="p-3.5 rounded-xl flex flex-col gap-1.5"
-            style={{ background: row.bg, border: `1px solid ${row.border}` }}>
-            <div className="flex items-center justify-between gap-4">
-              <span className="text-[12.5px] font-semibold" style={{ color: "#F5F7FA" }}>{row.label}</span>
-              <span className="text-[15px] font-bold shrink-0 tabular-nums" style={{ color: row.color }}>
-                {row.value.toLocaleString()}
-              </span>
-            </div>
-            <p className="text-[11.5px] leading-relaxed" style={{ color: "rgba(139,149,167,0.85)" }}>{row.note}</p>
+      {rows.filter(r => !r.hide).map(row => (
+        <div key={row.label} className="p-3.5 rounded-xl flex flex-col gap-1.5"
+          style={{ background: row.bg, border: `1px solid ${row.border}` }}>
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-[12.5px] font-semibold" style={{ color: "#F5F7FA" }}>{row.label}</span>
+            <span className="text-[15px] font-bold shrink-0 tabular-nums" style={{ color: row.color }}>
+              {row.value.toLocaleString()}
+            </span>
           </div>
-        )
+          <p className="text-[11.5px] leading-relaxed" style={{ color: "rgba(139,149,167,0.85)" }}>{row.note}</p>
+        </div>
       ))}
 
-      {/* Platform rule notice */}
-      <div className="flex items-start gap-2 p-3 rounded-xl text-[11.5px] leading-relaxed"
-        style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", color: "#8B95A7" }}>
-        <Info size={12} className="mt-0.5 shrink-0" style={{ color: "#8B95A7" }} />
-        <span>
-          This application sends messages using Facebook Messenger&apos;s <strong style={{ color: "#F5F7FA" }}>RESPONSE</strong> messaging type only.
-          This requires the recipient to have sent a message to your Page in the last 24 hours.
-          Contacts outside this window <strong style={{ color: "#F5F7FA" }}>cannot receive a message</strong> through this system — there is no alternative method, tag, or workaround available here.
-        </span>
-      </div>
+      {isMessageTag ? (
+        <div className="flex items-start gap-2 p-3 rounded-xl text-[11.5px] leading-relaxed"
+          style={{ background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.18)", color: "#F59E0B" }}>
+          <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+          <span>
+            <strong>Content compliance required.</strong> Message Tag notifications must strictly match the selected tag type.
+            Misuse of Message Tags violates Meta&apos;s Messenger Platform Policy and may result in your Page being restricted from sending messages.
+            Only use this option if the message content genuinely qualifies as a <strong>{tagDef?.label ?? "utility notification"}</strong>.
+          </span>
+        </div>
+      ) : (
+        <div className="flex items-start gap-2 p-3 rounded-xl text-[11.5px] leading-relaxed"
+          style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", color: "#8B95A7" }}>
+          <Info size={12} className="mt-0.5 shrink-0" style={{ color: "#8B95A7" }} />
+          <span>
+            RESPONSE messaging requires the recipient to have sent a message to your Page within the last 24 hours.
+            Contacts outside this window cannot receive a message via RESPONSE.
+            For eligible utility notifications (event reminders, purchase updates, account alerts),
+            switch to <strong style={{ color: "#F5F7FA" }}>Message Tag</strong> above to reach out-of-window contacts.
+          </span>
+        </div>
+      )}
     </div>
   );
 }
@@ -839,13 +892,16 @@ function CheckRow({ check }: { check: ComplianceCheck }) {
   );
 }
 
-function StepCompliance({ template, fieldValues, eligibility, eligibilityLoading, recipientCount }: {
+function StepCompliance({ template, fieldValues, eligibility, eligibilityLoading, recipientCount, messagingTag, onMessagingTagChange }: {
   template: AvailableTemplate; fieldValues: Record<string, string>;
   eligibility: EligibilityResult | null; eligibilityLoading: boolean; recipientCount: number;
+  messagingTag: MessageTagValue | null; onMessagingTagChange: (tag: MessageTagValue | null) => void;
 }) {
   const allVars = extractVars(template.content);
   const customVars = allVars.filter(v => !CONTACT_VARS.has(v));
   const unfilledVars = customVars.filter(v => !(fieldValues[v] ?? "").trim());
+  const isMessageTag = messagingTag !== null;
+  const tagDef = MESSAGE_TAG_OPTIONS.find(t => t.value === messagingTag);
 
   const checks: ComplianceCheck[] = [
     {
@@ -870,23 +926,27 @@ function StepCompliance({ template, fieldValues, eligibility, eligibilityLoading
       status: recipientCount > 0 ? "pass" : "fail",
     },
     {
-      label: "Messaging window check (RESPONSE · 24-hour rule)",
+      label: isMessageTag
+        ? `Messaging method: MESSAGE_TAG · ${tagDef?.label ?? messagingTag}`
+        : "Messaging method: RESPONSE · 24-hour window",
       detail: eligibilityLoading
         ? "Checking messaging status…"
         : eligibility === null
         ? "Messaging status unknown — complete recipient selection first."
         : eligibility.eligibleForMethod === 0
-        ? `None of the ${eligibility.total.toLocaleString()} selected contacts have an active Messenger window. The RESPONSE messaging type requires recipients to have sent a message to this Page within the last 24 hours. There is no alternative sending method available.`
+        ? isMessageTag
+          ? "No subscribed contacts are available for this tag. All selected contacts appear to be opted out."
+          : `None of the ${eligibility.total.toLocaleString()} selected contacts have an active Messenger window. Use Message Tag (below) to reach out-of-window contacts for eligible utility notifications.`
         : eligibility.cannotSend > 0
-        ? `${eligibility.eligibleForMethod.toLocaleString()} of ${eligibility.total.toLocaleString()} contacts are eligible. ${eligibility.cannotSend.toLocaleString()} will be skipped (window expired, never messaged, or opted out). No credits are charged for skipped contacts.`
-        : `All ${eligibility.eligibleForMethod.toLocaleString()} selected contact${eligibility.eligibleForMethod !== 1 ? "s have" : " has"} an active 24-hour Messenger window.`,
+        ? `${eligibility.eligibleForMethod.toLocaleString()} of ${eligibility.total.toLocaleString()} contacts are eligible. ${eligibility.cannotSend.toLocaleString()} will be skipped. No credits charged for skipped contacts.`
+        : `All ${eligibility.eligibleForMethod.toLocaleString()} selected contact${eligibility.eligibleForMethod !== 1 ? "s are" : " is"} eligible.`,
       status: eligibilityLoading ? "loading" : eligibility === null ? "warn" : eligibility.eligibleForMethod === 0 ? "fail" : eligibility.cannotSend > 0 ? "warn" : "pass",
     },
-    {
-      label: "Message type compliance",
-      detail: "This is a utility notification. It will be sent via Facebook Messenger as messaging_type: RESPONSE, which requires an active 24-hour window opened by the recipient.",
-      status: "pass",
-    },
+    ...(isMessageTag ? [{
+      label: "Message Tag content compliance",
+      detail: `Content must strictly match the "${tagDef?.label ?? messagingTag}" tag type. ${tagDef?.description ?? ""} Misuse violates Meta's Messenger Platform Policy and may result in your Page being restricted.`,
+      status: "warn" as const,
+    }] : []),
     {
       label: "Content restriction",
       detail: "Message content is locked to a pre-approved template. Free-form promotional content is not permitted.",
@@ -909,6 +969,62 @@ function StepCompliance({ template, fieldValues, eligibility, eligibilityLoading
             ? `${blocking.length} issue${blocking.length !== 1 ? "s" : ""} must be resolved before sending.`
             : "Checks in progress…"}
         </span>
+      </div>
+
+      {/* Messaging method selector */}
+      <div className="rounded-xl overflow-hidden" style={{ border: "1px solid rgba(255,255,255,0.09)" }}>
+        <div className="px-4 py-3 text-[10.5px] font-semibold uppercase tracking-widest"
+          style={{ background: "rgba(255,255,255,0.02)", color: "#8B95A7", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+          Messaging Method
+        </div>
+
+        {/* RESPONSE option */}
+        <button
+          onClick={() => onMessagingTagChange(null)}
+          className="w-full flex items-start gap-3 px-4 py-3 text-left transition-colors"
+          style={{
+            background: !isMessageTag ? "rgba(108,99,255,0.08)" : "transparent",
+            borderBottom: "1px solid rgba(255,255,255,0.05)",
+          }}>
+          <div className="mt-0.5 w-4 h-4 rounded-full border flex items-center justify-center shrink-0"
+            style={{ borderColor: !isMessageTag ? "#6C63FF" : "rgba(255,255,255,0.2)", background: !isMessageTag ? "#6C63FF" : "transparent" }}>
+            {!isMessageTag && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+          </div>
+          <div>
+            <div className="text-[13px] font-semibold" style={{ color: "#F5F7FA" }}>Standard RESPONSE</div>
+            <div className="text-[11.5px] mt-0.5 leading-relaxed" style={{ color: "#8B95A7" }}>
+              Requires the recipient to have sent a message to your Page within the last 24 hours.
+              This is the standard Messenger window — no special tag or permission required.
+            </div>
+          </div>
+        </button>
+
+        {/* MESSAGE_TAG options */}
+        {MESSAGE_TAG_OPTIONS.map(opt => (
+          <button key={opt.value}
+            onClick={() => onMessagingTagChange(opt.value)}
+            className="w-full flex items-start gap-3 px-4 py-3 text-left transition-colors"
+            style={{
+              background: messagingTag === opt.value ? "rgba(245,158,11,0.07)" : "transparent",
+              borderBottom: "1px solid rgba(255,255,255,0.04)",
+            }}>
+            <div className="mt-0.5 w-4 h-4 rounded-full border flex items-center justify-center shrink-0"
+              style={{ borderColor: messagingTag === opt.value ? "#F59E0B" : "rgba(255,255,255,0.2)", background: messagingTag === opt.value ? "#F59E0B" : "transparent" }}>
+              {messagingTag === opt.value && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-[13px] font-semibold" style={{ color: "#F5F7FA" }}>Message Tag · {opt.label}</span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold uppercase tracking-wide"
+                  style={{ background: "rgba(245,158,11,0.15)", color: "#F59E0B" }}>Out-of-window</span>
+              </div>
+              <div className="text-[11.5px] mt-0.5 leading-relaxed" style={{ color: "#8B95A7" }}>{opt.description}</div>
+              <div className="text-[11px] mt-1 italic" style={{ color: "rgba(139,149,167,0.7)" }}>
+                Example: &ldquo;{opt.example}&rdquo;
+              </div>
+            </div>
+          </button>
+        ))}
       </div>
 
       <div className="flex flex-col gap-2">
@@ -1096,6 +1212,9 @@ export function SendWorkflow({ preSelectedTemplate, onClose, onCreated }: SendWo
   // Step 3
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
 
+  // Step 5
+  const [messagingTag, setMessagingTag] = useState<MessageTagValue | null>(null);
+
   // Step 6
   const [schedule, setSchedule] = useState<"now" | "later">("now");
   const [schedDate, setSchedDate] = useState("");
@@ -1159,6 +1278,7 @@ export function SendWorkflow({ preSelectedTemplate, onClose, onCreated }: SendWo
         const body: Record<string, unknown> = { pageId };
         if (mode === "contacts") body.contactIds = [...selectedContactIds];
         else if (mode === "groups") body.contactIds = effectiveContactIds.current;
+        if (messagingTag) body.messagingTag = messagingTag;
         const res = await fetch("/api/broadcasts/eligibility-check", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1168,7 +1288,7 @@ export function SendWorkflow({ preSelectedTemplate, onClose, onCreated }: SendWo
       } catch {} finally { setEligibilityLoading(false); }
     }, 400);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageId, mode, selectedContactIds.size, selectedGroupIds.size, Object.keys(resolvedGroupContacts).length]);
+  }, [pageId, mode, selectedContactIds.size, selectedGroupIds.size, Object.keys(resolvedGroupContacts).length, messagingTag]);
 
   // Derived values
   const customVars = template ? extractVars(template.content).filter(v => !CONTACT_VARS.has(v)) : [];
@@ -1214,6 +1334,11 @@ export function SendWorkflow({ preSelectedTemplate, onClose, onCreated }: SendWo
 
       if (mode === "all") body.allPageContacts = true;
       else body.contactIds = mode === "contacts" ? [...selectedContactIds] : effectiveContactIds.current;
+
+      if (messagingTag) {
+        body.messagingTag = messagingTag;
+        body.allowSubscriberSend = true;
+      }
 
       if (mode_ === "schedule" && schedDate) body.scheduledAt = schedDate;
 
@@ -1319,7 +1444,8 @@ export function SendWorkflow({ preSelectedTemplate, onClose, onCreated }: SendWo
           {step === 5 && template && (
             <StepCompliance template={template} fieldValues={fieldValues}
               eligibility={eligibility} eligibilityLoading={eligibilityLoading}
-              recipientCount={recipientCount} />
+              recipientCount={recipientCount}
+              messagingTag={messagingTag} onMessagingTagChange={setMessagingTag} />
           )}
           {step === 6 && template && (
             <StepSend broadcastName={broadcastName} template={template}

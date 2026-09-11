@@ -188,7 +188,8 @@ model Broadcast {
   startedAt    DateTime?
   completedAt  DateTime?
 
-  allowSubscriberSend Boolean @default(false) // send to page subscribers outside 24h window using messaging_type UPDATE + UTILITY template
+  allowSubscriberSend Boolean @default(false) // when true, use MESSAGE_TAG for contacts outside the 24-hour RESPONSE window
+  messagingTag        String?                 // MESSAGE_TAG value: CONFIRMED_EVENT_UPDATE | POST_PURCHASE_UPDATE | ACCOUNT_UPDATE
 
   totalRecipients Int @default(0)
   sent            Int @default(0)

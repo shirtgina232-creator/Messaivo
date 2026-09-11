@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { decryptToken } from "@/lib/token-crypto";
-import { sendMessengerMessage } from "@/lib/meta-graph";
+import { sendMessengerMessage, type MessageTag } from "@/lib/meta-graph";
 
 // ── Meta error code classification ───────────────────────────────────────────
 
@@ -139,6 +139,8 @@ export async function GET(request: Request) {
         message: true,
         messageTemplateId: true,
         fieldValues: true,
+        allowSubscriberSend: true,
+        messagingTag: true,
         totalRecipients: true,
         sent: true,
         failed: true,
@@ -234,6 +236,12 @@ export async function GET(request: Request) {
     const rawTemplate = isUserTemplate ? broadcast.message : null;
     const customFieldValues = (broadcast.fieldValues ?? {}) as Record<string, string>;
 
+    // Determine sending method for this broadcast:
+    //   RESPONSE    — standard conversational reply; requires 24-hour window
+    //   MESSAGE_TAG — out-of-window utility notification; requires tag + compliant content
+    const useMessageTag = broadcast.allowSubscriberSend && !!broadcast.messagingTag;
+    const messageTagValue = (broadcast.messagingTag ?? undefined) as MessageTag | undefined;
+
     // ── 7. Process each recipient ───────────────────────────────────────────
     const windowCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
@@ -269,8 +277,11 @@ export async function GET(request: Request) {
         continue;
       }
 
-      // Enforce Meta's 24-hour messaging window
-      if (!recipient.contact.lastMessageAt || recipient.contact.lastMessageAt < windowCutoff) {
+      // Enforce messaging window rules based on selected method:
+      //   RESPONSE mode  → requires an inbound message within the last 24 hours
+      //   MESSAGE_TAG    → no 24-hour window restriction; any subscribed contact is eligible
+      const inWindow = recipient.contact.lastMessageAt && recipient.contact.lastMessageAt >= windowCutoff;
+      if (!inWindow && !useMessageTag) {
         ineligibleCount++;
         failedCount++;
         recipientUpdates.push({
@@ -305,12 +316,14 @@ export async function GET(request: Request) {
         messageToSend = renderTemplate(rawTemplate, customFieldValues, contactVars);
       }
 
-      // Call Meta Send API
+      // Call Meta Send API with the appropriate messaging_type and tag
       const result = await sendMessengerMessage(
         plainToken,
         page.pageId,
         recipient.contact.metaUserId,
         messageToSend,
+        useMessageTag ? "MESSAGE_TAG" : "RESPONSE",
+        useMessageTag ? messageTagValue : undefined,
       );
 
       // Rate-limit delay between API calls (Meta compliance)

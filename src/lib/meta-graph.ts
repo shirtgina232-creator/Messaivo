@@ -11,10 +11,27 @@ export interface SendResult {
   errorCode: number | null;
 }
 
+// Valid MESSAGE_TAG values for out-of-window utility messaging.
+// Content MUST match the selected tag — misuse violates Meta policy.
+export const MESSAGE_TAGS = {
+  CONFIRMED_EVENT_UPDATE: "CONFIRMED_EVENT_UPDATE",
+  POST_PURCHASE_UPDATE:   "POST_PURCHASE_UPDATE",
+  ACCOUNT_UPDATE:         "ACCOUNT_UPDATE",
+} as const;
+export type MessageTag = typeof MESSAGE_TAGS[keyof typeof MESSAGE_TAGS];
+
 /**
  * Send a text message from a Facebook Page to a user via Messenger.
- * messagingType defaults to "RESPONSE" (within 24-hour window).
- * Pass "UPDATE" for utility templates sent to page subscribers outside the 24-hour window.
+ *
+ * messagingType "RESPONSE" — standard reply, requires contact to have sent a
+ *   message to the Page within the last 24 hours.
+ *
+ * messagingType "MESSAGE_TAG" — out-of-window utility notification. Requires a
+ *   `tag` value. Content must strictly match the tag:
+ *   - CONFIRMED_EVENT_UPDATE: event reminders / updates for registered events
+ *   - POST_PURCHASE_UPDATE:   receipt or order status for an actual purchase
+ *   - ACCOUNT_UPDATE:         non-recurring account or service notification
+ *
  * Token must already be decrypted before passing here.
  */
 export async function sendMessengerMessage(
@@ -22,7 +39,8 @@ export async function sendMessengerMessage(
   metaPageId: string,
   recipientPsid: string,
   text: string,
-  messagingType: "RESPONSE" | "UPDATE" = "RESPONSE",
+  messagingType: "RESPONSE" | "MESSAGE_TAG" = "RESPONSE",
+  tag?: MessageTag,
 ): Promise<SendResult> {
   let res: Response;
   try {
@@ -34,6 +52,7 @@ export async function sendMessengerMessage(
         body: JSON.stringify({
           recipient: { id: recipientPsid },
           messaging_type: messagingType,
+          ...(messagingType === "MESSAGE_TAG" && tag && { tag }),
           message: { text },
         }),
       },

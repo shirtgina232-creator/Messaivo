@@ -58,7 +58,11 @@ export async function POST(req: Request) {
       return badRequest("Invalid JSON body");
     }
 
-    const { name, message, pageId, templateId, messageTemplateId, fieldValues, scheduledAt, contactIds, allPageContacts, allowSubscriberSend } = body as Record<string, unknown>;
+    const { name, message, pageId, templateId, messageTemplateId, fieldValues, scheduledAt, contactIds, allPageContacts, allowSubscriberSend, messagingTag } = body as Record<string, unknown>;
+
+    // Validate messagingTag if provided
+    const VALID_TAGS = new Set(["CONFIRMED_EVENT_UPDATE", "POST_PURCHASE_UPDATE", "ACCOUNT_UPDATE"]);
+    const resolvedMessagingTag = typeof messagingTag === "string" && VALID_TAGS.has(messagingTag) ? messagingTag : null;
 
     if (!name || typeof name !== "string" || !name.trim()) return badRequest("name is required");
 
@@ -197,7 +201,8 @@ export async function POST(req: Request) {
         templateName: resolvedTemplateName,
         fieldValues: resolvedFieldValues ?? undefined,
         scheduledAt: typeof scheduledAt === "string" ? new Date(scheduledAt) : null,
-        allowSubscriberSend: allowSubscriberSend === true,
+        allowSubscriberSend: allowSubscriberSend === true && !!resolvedMessagingTag,
+        messagingTag: resolvedMessagingTag,
         status: "draft",
         totalRecipients: validContactIds.length,
         recipients: validContactIds.length > 0 ? {
