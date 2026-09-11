@@ -354,8 +354,9 @@ export default function PagesPage() {
 
         cursor = data.nextCursor ?? null;
 
-        // 500 ms pause between batches to avoid hammering Meta's API
-        await new Promise(r => setTimeout(r, 500));
+        // 100 ms pause between batches — enough to avoid Meta rate-limiting
+        // without making a 1000-conversation scan take 8+ minutes.
+        await new Promise(r => setTimeout(r, 100));
       }
     } finally {
       setScanningIds(prev => { const n = new Set(prev); n.delete(pageId); return n; });
@@ -579,38 +580,45 @@ export default function PagesPage() {
                     <span className="text-[11px] flex items-center gap-1" style={{ color: "#8B85FF" }}>
                       <Loader2 size={9} className="animate-spin" />
                       {progress && progress.conversations > 0
-                        ? `${progress.conversations.toLocaleString()} synced…`
+                        ? `${progress.conversations.toLocaleString()} found…`
                         : "Scanning…"}
                     </span>
                   ) : (
-                    <div className="flex items-center gap-1 text-[11.5px]" style={{ color: p._count ? "#C4CDD8" : "#8B95A7" }}>
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <div className="flex items-center gap-1 text-[11.5px]" title="Unique contacts imported from Messenger conversations">
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                        style={{ color: p.lastScannedAt ? "#8B85FF" : "#8B95A7" }}>
                         <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
                         <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
                       </svg>
-                      {p._count !== undefined
-                        ? <span><strong style={{ color: "#F5F7FA" }}>{p._count.contacts.toLocaleString()}</strong> customers</span>
+                      {p.lastScannedAt
+                        ? <span><strong style={{ color: "#F5F7FA" }}>{(p._count?.contacts ?? 0).toLocaleString()}</strong> <span style={{ color: "#8B95A7" }}>contacts</span></span>
                         : <span style={{ color: "#8B95A7" }}>Not scanned yet</span>}
                     </div>
                   )}
                 </div>
 
                 {/* Scan status footer */}
-                {result ? (
+                {scanning ? (
+                  <div className="mt-auto pt-2 border-t" style={{ borderColor: "rgba(255,255,255,0.05)" }}>
+                    <div className="flex items-center gap-1.5 text-[11px]" style={{ color: "#8B85FF" }}>
+                      <Loader2 size={9} className="animate-spin shrink-0" />
+                      {progress && progress.conversations > 0
+                        ? <>Fetching all conversations… <strong>{progress.conversations.toLocaleString()}</strong> so far</>
+                        : "Connecting to Meta API…"}
+                    </div>
+                  </div>
+                ) : result ? (
                   <div className="mt-auto pt-2 border-t" style={{ borderColor: "rgba(255,255,255,0.05)" }}>
                     {result.error ? (
                       <span className="text-[11px]" style={{ color: "#EF4444" }}>
                         {result.nextCursor
-                          ? `Paused after ${result.stats.conversationsProcessed} conversation${result.stats.conversationsProcessed !== 1 ? "s" : ""} — click `
-                          : "Scan error: "}
-                        {result.nextCursor
-                          ? <><RefreshCw size={9} className="inline" /> to resume</>
-                          : result.error}
+                          ? <>Paused at {result.stats.conversationsProcessed.toLocaleString()} conversations — click <RefreshCw size={9} className="inline" /> to resume</>
+                          : `Error: ${result.error}`}
                       </span>
                     ) : (
                       <span className="text-[11px]" style={{ color: "#10B981" }}>
-                        ✓ Synced {result.stats.conversationsProcessed} conversation{result.stats.conversationsProcessed !== 1 ? "s" : ""},
-                        {" "}{result.stats.messagesInserted} new message{result.stats.messagesInserted !== 1 ? "s" : ""}
+                        ✓ {result.stats.conversationsProcessed.toLocaleString()} conversation{result.stats.conversationsProcessed !== 1 ? "s" : ""} scanned
+                        {result.stats.messagesInserted > 0 && <>, {result.stats.messagesInserted.toLocaleString()} messages imported</>}
                       </span>
                     )}
                   </div>

@@ -108,8 +108,17 @@ export interface ConversationPageResult {
 
 /**
  * Fetch one page of Messenger conversations for a Facebook Page.
- * Returns up to 20 threads with their most recent messages.
+ * Returns up to 100 threads with their most recent 25 messages each.
  * Token must already be decrypted before passing here.
+ *
+ * Pagination notes:
+ * - `limit=100` keeps the number of round-trips low while staying within
+ *   Meta's documented maximum for cursor-paginated endpoints.
+ * - `messages.limit(25)` is explicit so Meta returns a predictable sub-set
+ *   per conversation rather than the default (which can vary).
+ * - The cursor is extracted from `paging.cursors.after` first, then falls
+ *   back to parsing the `after` param from the `paging.next` URL — this
+ *   handles API responses that omit the `cursors` object.
  */
 export async function fetchConversationPage(
   pageAccessToken: string,
@@ -118,8 +127,9 @@ export async function fetchConversationPage(
 ): Promise<ConversationPageResult> {
   const url = new URL(`${GRAPH}/${metaPageId}/conversations`);
   url.searchParams.set("platform", "messenger");
-  url.searchParams.set("fields", "id,participants,messages{id,message,from,created_time}");
-  url.searchParams.set("limit", "20");
+  // Explicit message sub-limit avoids Meta silently capping conversation results
+  url.searchParams.set("fields", "id,participants,messages.limit(25){id,message,from,created_time}");
+  url.searchParams.set("limit", "100");
   url.searchParams.set("access_token", pageAccessToken);
   if (afterCursor) url.searchParams.set("after", afterCursor);
 
@@ -151,7 +161,21 @@ export async function fetchConversationPage(
     };
   }
 
-  const nextCursor = body.paging?.next ? (body.paging.cursors?.after ?? null) : null;
+  // Extract the after-cursor that drives the next page.
+  // Primary:  paging.cursors.after  (standard cursor-paging shape)
+  // Fallback: parse ?after= from paging.next (some Meta endpoints omit cursors object)
+  let nextCursor: string | null = null;
+  if (body.paging?.next) {
+    nextCursor = body.paging.cursors?.after ?? null;
+    if (!nextCursor) {
+      try {
+        nextCursor = new URL(body.paging.next).searchParams.get("after");
+      } catch {
+        // malformed next URL — treat as no more pages
+      }
+    }
+  }
+
   return { conversations: body.data ?? [], nextCursor, error: null };
 }
 
