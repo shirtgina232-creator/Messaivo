@@ -484,6 +484,17 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
     !templateSearch || t.name.toLowerCase().includes(templateSearch.toLowerCase())
   );
 
+  // Sending mode: template broadcast vs. standard message
+  const isTemplateBroadcast = messageMode === "template" && !!selectedTemplate;
+
+  // Audience counts derived from a single eligibility fetch:
+  // - Standard (Write Message): only contacts with 24h window open
+  // - Template Broadcast: contacts who have EVER messaged (windowOpen + windowClosed)
+  //   — these can be reached via platform template mechanics outside the standard window
+  const standardReachable  = reachable?.windowOpen ?? 0;
+  const templateEligible   = (reachable?.windowOpen ?? 0) + (reachable?.windowClosed ?? 0);
+  const displayEligible    = isTemplateBroadcast ? templateEligible : standardReachable;
+
   // Derive variables and preview
   const customVars = selectedTemplate ? extractCustomVars(selectedTemplate.content) : [];
   const hasContactVars = selectedTemplate
@@ -607,44 +618,95 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
                 ? <span className="flex items-center gap-1 text-[11.5px]" style={{ color: "#8B95A7" }}><Loader2 size={10} className="animate-spin" /> Counting audience…</span>
                 : reachable !== null
                 ? <div className="flex flex-col gap-1.5">
-                    {/* Summary row */}
-                    <div className="flex items-center gap-1.5 text-[11.5px]" style={{ color: "#8B95A7" }}>
-                      <Users size={11} />
-                      <strong style={{ color: "#F5F7FA" }}>{reachable.total.toLocaleString()}</strong> total contacts
+                    {/* Total + mode badge */}
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5 text-[11.5px]" style={{ color: "#8B95A7" }}>
+                        <Users size={11} />
+                        <strong style={{ color: "#F5F7FA" }}>{reachable.total.toLocaleString()}</strong> total contacts
+                      </div>
+                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                        style={{
+                          background: isTemplateBroadcast ? "rgba(108,99,255,0.12)" : "rgba(16,185,129,0.10)",
+                          color: isTemplateBroadcast ? "#8B85FF" : "#10B981",
+                          border: `1px solid ${isTemplateBroadcast ? "rgba(108,99,255,0.25)" : "rgba(16,185,129,0.2)"}`,
+                        }}>
+                        {isTemplateBroadcast ? "Template Broadcast" : "Standard Message"}
+                      </span>
                     </div>
-                    {/* Breakdown grid */}
-                    <div className="grid grid-cols-2 gap-1.5 rounded-lg p-2.5"
-                      style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)" }}>
-                      <div className="flex items-center gap-1.5">
-                        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "#10B981" }} />
-                        <span className="text-[11px]" style={{ color: "#8B95A7" }}>
-                          <strong style={{ color: "#10B981" }}>{reachable.windowOpen.toLocaleString()}</strong> reachable <span style={{ opacity: 0.6 }}>(24h window open)</span>
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "#F59E0B" }} />
-                        <span className="text-[11px]" style={{ color: "#8B95A7" }}>
-                          <strong style={{ color: "#F59E0B" }}>{reachable.windowClosed.toLocaleString()}</strong> window closed <span style={{ opacity: 0.6 }}>(messaged &gt;24h ago)</span>
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "#8B95A7" }} />
-                        <span className="text-[11px]" style={{ color: "#8B95A7" }}>
-                          <strong style={{ color: "#C4CDD8" }}>{reachable.neverMessaged.toLocaleString()}</strong> never messaged <span style={{ opacity: 0.6 }}>(no inbound record)</span>
-                        </span>
-                      </div>
-                      {reachable.unsubscribed > 0 && (
+
+                    {/* Mode-aware breakdown */}
+                    {isTemplateBroadcast ? (
+                      /* Template mode — windowOpen + windowClosed are eligible */
+                      <div className="rounded-lg p-2.5 flex flex-col gap-1.5"
+                        style={{ background: "rgba(108,99,255,0.06)", border: "1px solid rgba(108,99,255,0.18)" }}>
                         <div className="flex items-center gap-1.5">
-                          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "#EF4444" }} />
+                          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "#8B85FF" }} />
                           <span className="text-[11px]" style={{ color: "#8B95A7" }}>
-                            <strong style={{ color: "#EF4444" }}>{reachable.unsubscribed.toLocaleString()}</strong> unsubscribed
+                            <strong style={{ color: "#8B85FF" }}>{templateEligible.toLocaleString()}</strong> eligible for template broadcast
+                            <span style={{ opacity: 0.6 }}> (have previously messaged this page)</span>
                           </span>
                         </div>
-                      )}
-                    </div>
-                    {reachable.windowOpen === 0 && (
-                      <p className="text-[11px] leading-relaxed" style={{ color: "#F59E0B" }}>
-                        ⚠ No contacts have messaged this page in the last 24 hours — the Meta 24-hour window is closed for all subscribers.
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "#10B981" }} />
+                          <span className="text-[11px]" style={{ color: "#8B95A7" }}>
+                            <strong style={{ color: "#10B981" }}>{reachable.windowOpen.toLocaleString()}</strong> in active 24h window
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "#F59E0B" }} />
+                          <span className="text-[11px]" style={{ color: "#8B95A7" }}>
+                            <strong style={{ color: "#F59E0B" }}>{reachable.windowClosed.toLocaleString()}</strong> outside 24h window
+                            <span style={{ opacity: 0.6 }}> (reached via template)</span>
+                          </span>
+                        </div>
+                        {(reachable.neverMessaged + reachable.unsubscribed) > 0 && (
+                          <div className="flex items-center gap-1.5">
+                            <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "#8B95A7" }} />
+                            <span className="text-[11px]" style={{ color: "#8B95A7" }}>
+                              <strong style={{ color: "#C4CDD8" }}>{(reachable.neverMessaged + reachable.unsubscribed).toLocaleString()}</strong> excluded
+                              <span style={{ opacity: 0.6 }}> (never messaged or unsubscribed)</span>
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      /* Standard mode — 24h window only */
+                      <div className="grid grid-cols-2 gap-1.5 rounded-lg p-2.5"
+                        style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "#10B981" }} />
+                          <span className="text-[11px]" style={{ color: "#8B95A7" }}>
+                            <strong style={{ color: "#10B981" }}>{reachable.windowOpen.toLocaleString()}</strong> reachable
+                            <span style={{ opacity: 0.6 }}> (24h window open)</span>
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "#F59E0B" }} />
+                          <span className="text-[11px]" style={{ color: "#8B95A7" }}>
+                            <strong style={{ color: "#F59E0B" }}>{reachable.windowClosed.toLocaleString()}</strong> window closed
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "#8B95A7" }} />
+                          <span className="text-[11px]" style={{ color: "#8B95A7" }}>
+                            <strong style={{ color: "#C4CDD8" }}>{reachable.neverMessaged.toLocaleString()}</strong> never messaged
+                          </span>
+                        </div>
+                        {reachable.unsubscribed > 0 && (
+                          <div className="flex items-center gap-1.5">
+                            <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "#EF4444" }} />
+                            <span className="text-[11px]" style={{ color: "#8B95A7" }}>
+                              <strong style={{ color: "#EF4444" }}>{reachable.unsubscribed.toLocaleString()}</strong> unsubscribed
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Hint to select a template when window is closed */}
+                    {!isTemplateBroadcast && reachable.windowOpen === 0 && reachable.windowClosed > 0 && (
+                      <p className="text-[11px] leading-relaxed" style={{ color: "#8B85FF" }}>
+                        💡 Select a template above to reach {templateEligible.toLocaleString()} contacts outside the 24h window.
                       </p>
                     )}
                   </div>
@@ -912,20 +974,24 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
             className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold text-white"
             style={{ background: "#6C63FF", opacity: (submitting || !canSend) ? 0.5 : 1 }}>
             {submitting
-              ? <><Loader2 size={14} className="animate-spin" /> {scheduleMode === "later" ? "Scheduling…" : "Sending…"}</>
+              ? <><Loader2 size={14} className="animate-spin" /> {scheduleMode === "later" ? "Scheduling…" : isTemplateBroadcast ? "Sending Template…" : "Sending…"}</>
               : scheduleMode === "later"
-              ? <><Send size={14} /> Schedule Broadcast</>
+              ? <><Send size={14} /> {isTemplateBroadcast ? "Schedule Template" : "Schedule Broadcast"}</>
               : <>
-                  <Send size={14} /> Send Now
+                  <Send size={14} /> {isTemplateBroadcast ? "Send Template" : "Send Now"}
                   {reachableLoading
                     ? <span className="ml-1 opacity-60 text-[12px] font-normal">— counting…</span>
                     : reachable !== null
-                    ? reachable.windowOpen > 0
+                    ? isTemplateBroadcast
                       ? <span className="ml-1 text-[12px] font-normal">
-                          — 🔥 <strong style={{ fontWeight: 700 }}>{reachable.windowOpen.toLocaleString()} Reachable Customers</strong>
+                          — 🔥 <strong style={{ fontWeight: 700 }}>{displayEligible.toLocaleString()} Eligible Customers</strong>
                         </span>
-                      : <span className="ml-1 text-[12px] font-normal" style={{ opacity: 0.75 }}>
-                          — <strong style={{ fontWeight: 700 }}>0 Reachable</strong> (24h window closed)
+                      : displayEligible > 0
+                      ? <span className="ml-1 text-[12px] font-normal">
+                          — 🔥 <strong style={{ fontWeight: 700 }}>{displayEligible.toLocaleString()} Reachable</strong>
+                        </span>
+                      : <span className="ml-1 text-[12px] font-normal" style={{ opacity: 0.65 }}>
+                          — <strong style={{ fontWeight: 700 }}>0 Reachable</strong>
                         </span>
                     : null}
                 </>}
