@@ -556,8 +556,8 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
         <div className="flex items-center justify-between px-6 py-4 shrink-0"
           style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
           <div>
-            <h2 className="text-[16px] font-semibold" style={{ color: "#F5F7FA" }}>New Broadcast</h2>
-            <p className="text-[12px] mt-0.5" style={{ color: "#8B95A7" }}>Send a message to your page subscribers</p>
+            <h2 className="text-[16px] font-semibold" style={{ color: "#F5F7FA" }}>Bulk Message</h2>
+            <p className="text-[12px] mt-0.5" style={{ color: "#8B95A7" }}>Send a bulk message to your selected page audience.</p>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/5" style={{ color: "#8B95A7" }}><X size={16} /></button>
         </div>
@@ -868,7 +868,18 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
             style={{ background: "#6C63FF", opacity: (submitting || !canSend) ? 0.5 : 1 }}>
             {submitting
               ? <><Loader2 size={14} className="animate-spin" /> {scheduleMode === "later" ? "Scheduling…" : "Sending…"}</>
-              : <><Send size={14} /> {scheduleMode === "later" ? "Schedule Broadcast" : "Send Now"}</>}
+              : scheduleMode === "later"
+              ? <><Send size={14} /> Schedule Broadcast</>
+              : <>
+                  <Send size={14} /> Send Now
+                  {reachableLoading
+                    ? <span className="ml-1 opacity-60 text-[12px] font-normal">— counting…</span>
+                    : reachable !== null
+                    ? <span className="ml-1 text-[12px] font-normal">
+                        — 🔥 <strong className="font-bold">{reachable.eligible.toLocaleString()} Reachable</strong>
+                      </span>
+                    : null}
+                </>}
           </button>
         </div>
       </div>
