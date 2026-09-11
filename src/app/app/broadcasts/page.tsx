@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Plus, Search, Send, Loader2, ChevronDown, ChevronRight,
   CheckCircle2, Clock, AlertCircle, X, RefreshCw, Users, FileText,
-  Calendar, MessageSquare,
+  Calendar, MessageSquare, StopCircle,
 } from "lucide-react";
 import { useWorkspace } from "@/lib/workspace-context";
 
@@ -109,13 +109,82 @@ function ProgressCell({ b }: { b: BroadcastItem }) {
   );
 }
 
+// ── Cancel Confirm Dialog ──────────────────────────────────────────────────────
+
+function CancelConfirmDialog({ broadcast, onConfirm, onDismiss, cancelling }: {
+  broadcast: BroadcastItem;
+  onConfirm: () => void;
+  onDismiss: () => void;
+  cancelling: boolean;
+}) {
+  const delivered = broadcast.sentCount ?? 0;
+  const total = broadcast.totalRecipients ?? broadcast._count?.recipients ?? 0;
+  const remaining = Math.max(0, total - delivered);
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center px-4">
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={!cancelling ? onDismiss : undefined} />
+      <div className="relative w-full max-w-md rounded-2xl overflow-hidden shadow-2xl"
+        style={{ background: "#0D1520", border: "1px solid rgba(239,68,68,0.25)" }}>
+        {/* Header */}
+        <div className="flex items-start gap-3 px-6 pt-6 pb-4">
+          <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0"
+            style={{ background: "rgba(239,68,68,0.12)" }}>
+            <StopCircle size={20} style={{ color: "#EF4444" }} />
+          </div>
+          <div>
+            <h3 className="text-[15px] font-semibold" style={{ color: "#F5F7FA" }}>Cancel Broadcast?</h3>
+            <p className="text-[12.5px] mt-1 leading-relaxed" style={{ color: "#8B95A7" }}>
+              Are you sure you want to cancel <strong style={{ color: "#F5F7FA" }}>&ldquo;{broadcast.name}&rdquo;</strong>?
+              Messages that have already been delivered cannot be undone.
+            </p>
+          </div>
+        </div>
+
+        {/* Stats */}
+        <div className="mx-6 mb-5 rounded-xl p-4 flex gap-6"
+          style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+          <div>
+            <p className="text-[10.5px] uppercase tracking-wider font-semibold mb-0.5" style={{ color: "#8B95A7" }}>Already Delivered</p>
+            <p className="text-[20px] font-bold" style={{ color: "#10B981" }}>{delivered.toLocaleString()}</p>
+            <p className="text-[10.5px]" style={{ color: "#8B95A7" }}>will not be affected</p>
+          </div>
+          <div style={{ width: 1, background: "rgba(255,255,255,0.07)" }} />
+          <div>
+            <p className="text-[10.5px] uppercase tracking-wider font-semibold mb-0.5" style={{ color: "#8B95A7" }}>Will Be Stopped</p>
+            <p className="text-[20px] font-bold" style={{ color: "#F59E0B" }}>{remaining.toLocaleString()}</p>
+            <p className="text-[10.5px]" style={{ color: "#8B95A7" }}>pending messages</p>
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="flex gap-3 px-6 pb-6">
+          <button onClick={onDismiss} disabled={cancelling}
+            className="flex-1 py-2.5 rounded-xl text-[13px] font-medium"
+            style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.09)", color: "#F5F7FA" }}>
+            Keep Sending
+          </button>
+          <button onClick={onConfirm} disabled={cancelling}
+            className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold"
+            style={{ background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.35)", color: "#EF4444" }}>
+            {cancelling
+              ? <><Loader2 size={13} className="animate-spin" /> Cancelling…</>
+              : <><StopCircle size={13} /> Cancel Broadcast</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Broadcasts Table ───────────────────────────────────────────────────────────
 
-function BroadcastsTable({ broadcasts, pageMap, onRefresh, loading }: {
+function BroadcastsTable({ broadcasts, pageMap, onRefresh, loading, onCancel }: {
   broadcasts: BroadcastItem[];
   pageMap: Record<string, string>;
   onRefresh: () => void;
   loading: boolean;
+  onCancel: (b: BroadcastItem) => void;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
@@ -149,11 +218,12 @@ function BroadcastsTable({ broadcasts, pageMap, onRefresh, loading }: {
       <div className="rounded-xl overflow-hidden" style={{ border: "1px solid rgba(255,255,255,0.07)" }}>
         {/* Header */}
         <div className="grid text-[10.5px] font-semibold uppercase tracking-widest px-4 py-2.5"
-          style={{ gridTemplateColumns: "2fr 1fr 120px 140px 80px", background: "rgba(255,255,255,0.025)", color: "#8B95A7", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
+          style={{ gridTemplateColumns: "2fr 1fr 120px 140px 70px 80px", background: "rgba(255,255,255,0.025)", color: "#8B95A7", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
           <span>Campaign</span>
           <span>Page</span>
           <span>Status</span>
           <span>Delivered</span>
+          <span>Actions</span>
           <span>Created</span>
         </div>
 
@@ -173,31 +243,43 @@ function BroadcastsTable({ broadcasts, pageMap, onRefresh, loading }: {
             return (
               <div key={b.id} style={{ borderBottom: i < filtered.length - 1 ? "1px solid rgba(255,255,255,0.05)" : "none" }}>
                 {/* Row */}
-                <button
-                  onClick={() => setExpanded(prev => {
-                    const next = new Set(prev);
-                    next.has(b.id) ? next.delete(b.id) : next.add(b.id);
-                    return next;
-                  })}
-                  className="w-full grid items-center px-4 py-3.5 text-left transition-colors hover:bg-white/[0.02]"
-                  style={{ gridTemplateColumns: "2fr 1fr 120px 140px 80px" }}>
-                  {/* Campaign */}
-                  <div className="flex items-center gap-2 min-w-0">
+                <div className="grid items-center px-4 py-3.5 transition-colors hover:bg-white/[0.02]"
+                  style={{ gridTemplateColumns: "2fr 1fr 120px 140px 70px 80px" }}>
+                  {/* Campaign — clickable to expand */}
+                  <button
+                    onClick={() => setExpanded(prev => {
+                      const next = new Set(prev);
+                      next.has(b.id) ? next.delete(b.id) : next.add(b.id);
+                      return next;
+                    })}
+                    className="flex items-center gap-2 min-w-0 text-left">
                     {isExpanded ? <ChevronDown size={12} style={{ color: "#8B95A7" }} /> : <ChevronRight size={12} style={{ color: "#8B95A7" }} />}
                     <div className="min-w-0">
                       <p className="text-[13px] font-medium truncate" style={{ color: "#F5F7FA" }}>{b.name}</p>
                       <p className="text-[11px] truncate mt-0.5" style={{ color: "#8B95A7" }}>{previewText(b)}</p>
                     </div>
-                  </div>
+                  </button>
                   {/* Page */}
                   <div className="text-[12px] truncate pr-2" style={{ color: "#C4CDD8" }}>{pageName}</div>
                   {/* Status */}
                   <div><StatusBadge status={b.status} /></div>
                   {/* Delivered */}
                   <ProgressCell b={b} />
+                  {/* Actions */}
+                  <div>
+                    {b.status === "sending" && (
+                      <button
+                        onClick={() => onCancel(b)}
+                        title="Cancel broadcast"
+                        className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold transition-colors hover:bg-red-500/10"
+                        style={{ color: "#EF4444", border: "1px solid rgba(239,68,68,0.3)" }}>
+                        <StopCircle size={11} /> Cancel
+                      </button>
+                    )}
+                  </div>
                   {/* Created */}
                   <div className="text-[11px]" style={{ color: "#8B95A7" }}>{timeAgo(b.createdAt)}</div>
-                </button>
+                </div>
 
                 {/* Expanded detail */}
                 {isExpanded && (
@@ -665,6 +747,11 @@ export default function BroadcastsPage() {
   const [pageMap, setPageMap] = useState<Record<string, string>>({});
   const [showNew, setShowNew] = useState(false);
 
+  // Cancel flow
+  const [cancelTarget, setCancelTarget] = useState<BroadcastItem | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState("");
+
   // Build pageId → name map from workspace pages
   useEffect(() => {
     const m: Record<string, string> = {};
@@ -696,6 +783,25 @@ export default function BroadcastsPage() {
     }
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [hasInFlight, fetchBroadcasts]);
+
+  const handleCancelConfirm = useCallback(async () => {
+    if (!cancelTarget) return;
+    setCancelling(true); setCancelError("");
+    try {
+      const res = await fetch(`/api/broadcasts/${cancelTarget.id}/cancel`, { method: "POST" });
+      if (!res.ok) {
+        const d = await res.json() as { error?: string };
+        setCancelError(d.error ?? "Failed to cancel broadcast.");
+        return;
+      }
+      setCancelTarget(null);
+      fetchBroadcasts();
+    } catch {
+      setCancelError("Network error. Please try again.");
+    } finally {
+      setCancelling(false);
+    }
+  }, [cancelTarget, fetchBroadcasts]);
 
   const sent    = broadcasts.filter(b => b.status === "completed").length;
   const sending = broadcasts.filter(b => b.status === "sending").length;
@@ -747,6 +853,7 @@ export default function BroadcastsPage() {
         pageMap={pageMap}
         onRefresh={fetchBroadcasts}
         loading={loading}
+        onCancel={b => { setCancelTarget(b); setCancelError(""); }}
       />
 
       {/* New Broadcast Slide Panel */}
@@ -755,6 +862,25 @@ export default function BroadcastsPage() {
           onClose={() => setShowNew(false)}
           onCreated={() => { fetchBroadcasts(); setShowNew(false); }}
         />
+      )}
+
+      {/* Cancel Confirmation Dialog */}
+      {cancelTarget && (
+        <CancelConfirmDialog
+          broadcast={cancelTarget}
+          onConfirm={handleCancelConfirm}
+          onDismiss={() => { setCancelTarget(null); setCancelError(""); }}
+          cancelling={cancelling}
+        />
+      )}
+
+      {/* Cancel error toast */}
+      {cancelError && !cancelTarget && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-3 rounded-xl shadow-xl text-[13px]"
+          style={{ background: "#1A0A0A", border: "1px solid rgba(239,68,68,0.4)", color: "#EF4444" }}>
+          <AlertCircle size={14} /> {cancelError}
+          <button onClick={() => setCancelError("")} className="ml-2"><X size={13} /></button>
+        </div>
       )}
     </div>
   );
