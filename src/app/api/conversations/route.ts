@@ -19,7 +19,7 @@ export async function GET(req: Request) {
         ...(pageId && { pageId }),
       },
       include: {
-        contact: { select: { id: true, name: true, firstName: true, lastName: true, profilePicUrl: true } },
+        contact: { select: { id: true, name: true, firstName: true, lastName: true, profilePicUrl: true, lastMessageAt: true } },
         page: { select: { id: true, pageName: true, pageAvatar: true } },
       },
       // aiAutoReply and humanTakeover are included automatically (all scalar fields)

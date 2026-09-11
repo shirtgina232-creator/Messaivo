@@ -15,7 +15,7 @@ export async function GET(
     const conversation = await prisma.conversation.findFirst({
       where: { id, workspaceId: ws.id },
       include: {
-        contact: true,
+        contact: { select: { id: true, name: true, firstName: true, lastName: true, profilePicUrl: true, lastMessageAt: true, metaUserId: true, isSubscribed: true, tags: true, totalMessages: true, createdAt: true } },
         page: { select: { id: true, pageName: true, pageAvatar: true } },
         messages: { orderBy: { createdAt: "asc" }, take: 50 },
       },
