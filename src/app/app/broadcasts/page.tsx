@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import {
   Plus, Search, Send, Loader2, ChevronDown, ChevronRight,
   CheckCircle2, Clock, AlertCircle, X, RefreshCw, Users, FileText,
-  Calendar, MessageSquare, StopCircle,
+  Calendar, MessageSquare, StopCircle, ExternalLink,
 } from "lucide-react";
 import { useWorkspace } from "@/lib/workspace-context";
 
@@ -179,12 +180,13 @@ function CancelConfirmDialog({ broadcast, onConfirm, onDismiss, cancelling }: {
 
 // ── Broadcasts Table ───────────────────────────────────────────────────────────
 
-function BroadcastsTable({ broadcasts, pageMap, onRefresh, loading, onCancel }: {
+function BroadcastsTable({ broadcasts, pageMap, onRefresh, loading, onCancel, onViewDetails }: {
   broadcasts: BroadcastItem[];
   pageMap: Record<string, string>;
   onRefresh: () => void;
   loading: boolean;
   onCancel: (b: BroadcastItem) => void;
+  onViewDetails: (b: BroadcastItem) => void;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
@@ -266,7 +268,14 @@ function BroadcastsTable({ broadcasts, pageMap, onRefresh, loading, onCancel }: 
                   {/* Delivered */}
                   <ProgressCell b={b} />
                   {/* Actions */}
-                  <div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => onViewDetails(b)}
+                      title="View details"
+                      className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium transition-colors hover:bg-white/5"
+                      style={{ color: "#8B85FF", border: "1px solid rgba(139,133,255,0.25)" }}>
+                      <ExternalLink size={11} /> Details
+                    </button>
                     {b.status === "sending" && (
                       <button
                         onClick={() => onCancel(b)}
@@ -741,6 +750,7 @@ function FormSection({ label, children }: { label: string; children: React.React
 
 export default function BroadcastsPage() {
   const { pages } = useWorkspace();
+  const router = useRouter();
 
   const [broadcasts, setBroadcasts] = useState<BroadcastItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -854,6 +864,7 @@ export default function BroadcastsPage() {
         onRefresh={fetchBroadcasts}
         loading={loading}
         onCancel={b => { setCancelTarget(b); setCancelError(""); }}
+        onViewDetails={b => router.push(`/app/broadcasts/${b.id}`)}
       />
 
       {/* New Broadcast Slide Panel */}
