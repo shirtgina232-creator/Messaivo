@@ -385,7 +385,10 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
   const [groupsLoading, setGroupsLoading] = useState(false);
 
   // ── Reachable count ────────────────────────────────────────────────────────
-  const [reachable, setReachable] = useState<{ total: number; eligible: number } | null>(null);
+  const [reachable, setReachable] = useState<{
+    total: number; eligible: number;
+    windowOpen: number; windowClosed: number; neverMessaged: number; unsubscribed: number;
+  } | null>(null);
   const [reachableLoading, setReachableLoading] = useState(false);
 
   // ── Message ────────────────────────────────────────────────────────────────
@@ -460,8 +463,15 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
           method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
         });
         if (res.ok) {
-          const d = await res.json() as { total: number; windowOpen: number };
-          setReachable({ total: d.total, eligible: d.windowOpen });
+          const d = await res.json() as {
+            total: number; windowOpen: number; windowClosed: number;
+            neverMessaged: number; unsubscribed: number;
+          };
+          setReachable({
+            total: d.total, eligible: d.windowOpen,
+            windowOpen: d.windowOpen, windowClosed: d.windowClosed,
+            neverMessaged: d.neverMessaged, unsubscribed: d.unsubscribed,
+          });
         }
       } catch { /* ignore */ }
       finally { setReachableLoading(false); }
@@ -592,17 +602,52 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
                 </button>
               ))}
             </div>
-            <div className="mt-2 min-h-[18px] flex items-center gap-1.5">
+            <div className="mt-2">
               {reachableLoading
-                ? <span className="flex items-center gap-1 text-[11.5px]" style={{ color: "#8B95A7" }}><Loader2 size={10} className="animate-spin" /> Counting subscribers…</span>
+                ? <span className="flex items-center gap-1 text-[11.5px]" style={{ color: "#8B95A7" }}><Loader2 size={10} className="animate-spin" /> Counting audience…</span>
                 : reachable !== null
-                ? <span className="flex items-center gap-1.5 text-[11.5px]" style={{ color: "#8B95A7" }}>
-                    <Users size={11} />
-                    <strong style={{ color: "#F5F7FA" }}>{reachable.total.toLocaleString()}</strong> subscribers
-                    {reachable.eligible > 0 && reachable.eligible < reachable.total && (
-                      <> · <strong style={{ color: "#10B981" }}>{reachable.eligible.toLocaleString()}</strong> in 24h window</>
+                ? <div className="flex flex-col gap-1.5">
+                    {/* Summary row */}
+                    <div className="flex items-center gap-1.5 text-[11.5px]" style={{ color: "#8B95A7" }}>
+                      <Users size={11} />
+                      <strong style={{ color: "#F5F7FA" }}>{reachable.total.toLocaleString()}</strong> total contacts
+                    </div>
+                    {/* Breakdown grid */}
+                    <div className="grid grid-cols-2 gap-1.5 rounded-lg p-2.5"
+                      style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "#10B981" }} />
+                        <span className="text-[11px]" style={{ color: "#8B95A7" }}>
+                          <strong style={{ color: "#10B981" }}>{reachable.windowOpen.toLocaleString()}</strong> reachable <span style={{ opacity: 0.6 }}>(24h window open)</span>
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "#F59E0B" }} />
+                        <span className="text-[11px]" style={{ color: "#8B95A7" }}>
+                          <strong style={{ color: "#F59E0B" }}>{reachable.windowClosed.toLocaleString()}</strong> window closed <span style={{ opacity: 0.6 }}>(messaged &gt;24h ago)</span>
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "#8B95A7" }} />
+                        <span className="text-[11px]" style={{ color: "#8B95A7" }}>
+                          <strong style={{ color: "#C4CDD8" }}>{reachable.neverMessaged.toLocaleString()}</strong> never messaged <span style={{ opacity: 0.6 }}>(no inbound record)</span>
+                        </span>
+                      </div>
+                      {reachable.unsubscribed > 0 && (
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "#EF4444" }} />
+                          <span className="text-[11px]" style={{ color: "#8B95A7" }}>
+                            <strong style={{ color: "#EF4444" }}>{reachable.unsubscribed.toLocaleString()}</strong> unsubscribed
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                    {reachable.windowOpen === 0 && (
+                      <p className="text-[11px] leading-relaxed" style={{ color: "#F59E0B" }}>
+                        ⚠ No contacts have messaged this page in the last 24 hours — the Meta 24-hour window is closed for all subscribers.
+                      </p>
                     )}
-                  </span>
+                  </div>
                 : null}
             </div>
           </FormSection>
@@ -875,9 +920,13 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
                   {reachableLoading
                     ? <span className="ml-1 opacity-60 text-[12px] font-normal">— counting…</span>
                     : reachable !== null
-                    ? <span className="ml-1 text-[12px] font-normal">
-                        — 🔥 <strong className="font-bold">{reachable.eligible.toLocaleString()} Reachable</strong>
-                      </span>
+                    ? reachable.windowOpen > 0
+                      ? <span className="ml-1 text-[12px] font-normal">
+                          — 🔥 <strong style={{ fontWeight: 700 }}>{reachable.windowOpen.toLocaleString()} Reachable Customers</strong>
+                        </span>
+                      : <span className="ml-1 text-[12px] font-normal" style={{ opacity: 0.75 }}>
+                          — <strong style={{ fontWeight: 700 }}>0 Reachable</strong> (24h window closed)
+                        </span>
                     : null}
                 </>}
           </button>
