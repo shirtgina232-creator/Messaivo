@@ -1,5 +1,7 @@
 import crypto from "crypto";
 import { prisma } from "@/lib/db";
+import { decryptToken } from "@/lib/token-crypto";
+import { sendMessengerMessage } from "@/lib/meta-graph";
 
 // ── Meta webhook payload types ─────────────────────────────────────────────────
 
@@ -171,6 +173,7 @@ async function handleMessagingEvent(event: MetaMessagingEvent): Promise<void> {
         lastMessageAt: new Date(timestamp),
         unreadCount:  1,
       },
+      select: { id: true, aiAutoReply: true, humanTakeover: true },
     });
     console.log(`[Meta webhook] conversation upserted: conversationId=${conversation.id}`);
 
@@ -209,6 +212,22 @@ async function handleMessagingEvent(event: MetaMessagingEvent): Promise<void> {
       },
     });
     console.log(`[Meta webhook] message saved: messageId=${saved.id}`);
+
+    // ── AI Auto Reply ─────────────────────────────────────────────────────────
+    // Trigger only when aiAutoReply=true, humanTakeover=false, and there is text to respond to
+    if (conversation.aiAutoReply && !conversation.humanTakeover && msgText) {
+      try {
+        await triggerAiAutoReply({
+          conversationId: conversation.id,
+          pageDbId: page.id,
+          contactName: contact.name ?? contact.firstName ?? "there",
+          inboundText: msgText,
+          metaUserId: sender.id,
+        });
+      } catch (err) {
+        console.error("[Meta webhook] AI auto-reply error:", err);
+      }
+    }
     return;
   }
 
@@ -342,6 +361,102 @@ async function handleMessagingEvent(event: MetaMessagingEvent): Promise<void> {
     }
     return;
   }
+}
+
+// ── AI Auto Reply ─────────────────────────────────────────────────────────────
+
+async function triggerAiAutoReply({
+  conversationId,
+  pageDbId,
+  contactName,
+  inboundText,
+  metaUserId,
+}: {
+  conversationId: string;
+  pageDbId: string;
+  contactName: string;
+  inboundText: string;
+  metaUserId: string;
+}): Promise<void> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    console.warn("[AI auto-reply] ANTHROPIC_API_KEY not set — skipping");
+    return;
+  }
+
+  // Fetch the last 10 messages for context
+  const recentMessages = await prisma.message.findMany({
+    where: { conversationId },
+    orderBy: { createdAt: "desc" },
+    take: 10,
+    select: { direction: true, content: true },
+  });
+  const history = recentMessages.reverse().map(m => ({
+    role: m.direction === "inbound" ? "user" : "assistant" as const,
+    content: m.content ?? "",
+  })).filter(m => m.content);
+
+  // Call Claude API directly
+  const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 300,
+      system: `You are a helpful customer support agent. Be friendly, concise, and professional. The customer's name is ${contactName}. Keep replies under 3 sentences.`,
+      messages: history.length > 0 ? history : [{ role: "user", content: inboundText }],
+    }),
+  });
+
+  if (!claudeRes.ok) {
+    console.error("[AI auto-reply] Claude API error:", await claudeRes.text());
+    return;
+  }
+
+  const claudeData = await claudeRes.json() as { content: Array<{ type: string; text: string }> };
+  const aiReply = claudeData.content?.find(b => b.type === "text")?.text;
+  if (!aiReply) return;
+
+  // Look up page access token to send the reply
+  const pageRecord = await prisma.facebookPage.findFirst({
+    where: { id: pageDbId, isActive: true },
+    select: { pageId: true, accessToken: true },
+  });
+  if (!pageRecord) return;
+
+  let plainToken: string;
+  try { plainToken = decryptToken(pageRecord.accessToken); } catch { return; }
+
+  const sendResult = await sendMessengerMessage(plainToken, pageRecord.pageId, metaUserId, aiReply);
+  if (sendResult.error) {
+    console.error("[AI auto-reply] send failed:", sendResult.error);
+    return;
+  }
+
+  // Save the AI reply as an outbound message
+  await prisma.message.create({
+    data: {
+      conversationId,
+      metaMessageId: sendResult.messageId ?? null,
+      direction: "outbound",
+      messageType: "text",
+      content: aiReply,
+      status: "sent",
+      sentAt: new Date(),
+    },
+  });
+
+  // Update conversation lastMessageAt
+  await prisma.conversation.update({
+    where: { id: conversationId },
+    data: { lastMessageAt: new Date() },
+  });
+
+  console.log(`[AI auto-reply] sent reply to ${metaUserId}: "${aiReply.slice(0, 60)}…"`);
 }
 
 // ── Helper: find conversation from page ID and user PSID ──────────────────────

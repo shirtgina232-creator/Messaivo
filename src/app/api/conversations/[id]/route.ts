@@ -51,7 +51,7 @@ export async function PATCH(
       return badRequest("Invalid JSON body");
     }
 
-    const { status, assignedTo, unreadCount } = body as Record<string, unknown>;
+    const { status, assignedTo, unreadCount, aiAutoReply, humanTakeover } = body as Record<string, unknown>;
     if (status !== undefined && !VALID_STATUSES.includes(status as string)) {
       return badRequest(`status must be one of: ${VALID_STATUSES.join(", ")}`);
     }
@@ -61,7 +61,10 @@ export async function PATCH(
       data: {
         ...(typeof status === "string" && { status }),
         ...(typeof assignedTo === "string" && { assignedTo }),
+        ...(assignedTo === null && { assignedTo: null }),
         ...(typeof unreadCount === "number" && { unreadCount }),
+        ...(typeof aiAutoReply === "boolean" && { aiAutoReply }),
+        ...(typeof humanTakeover === "boolean" && { humanTakeover }),
       },
     });
 

@@ -22,6 +22,7 @@ export async function GET(req: Request) {
         contact: { select: { id: true, name: true, firstName: true, lastName: true, profilePicUrl: true } },
         page: { select: { id: true, pageName: true, pageAvatar: true } },
       },
+      // aiAutoReply and humanTakeover are included automatically (all scalar fields)
       orderBy: { lastMessageAt: "desc" },
       take: limit + 1,
       ...(cursor && { cursor: { id: cursor }, skip: 1 }),
