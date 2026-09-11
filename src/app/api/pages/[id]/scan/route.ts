@@ -40,7 +40,14 @@ export async function POST(
     // Mark as scanning on every call
     await prisma.facebookPage.update({ where: { id }, data: { scanStatus: "scanning" } });
 
-    const batchStats = { conversationsProcessed: 0, contactsUpserted: 0, messagesInserted: 0 };
+    const batchStats = {
+      conversationsProcessed: 0,
+      contactsUpserted: 0,
+      messagesInserted: 0,
+      // Diagnostic counters — help identify where contacts are lost
+      apiThreadsReceived: 0,    // raw thread count from Meta API
+      skippedNoCustomer: 0,     // threads where participant matching found no customer
+    };
     let scanError: string | null = null;
     let nextCursor: string | null = null;
     let hasMore = false;
@@ -54,13 +61,62 @@ export async function POST(
       } else {
         nextCursor = result.nextCursor;
         hasMore = !!nextCursor;
+        batchStats.apiThreadsReceived = result.conversations.length;
+
+        // ── Collect all work upfront, then write to DB in batched transactions ──────
+        // This avoids 400 serial DB round-trips (4 per thread × 100 threads) which
+        // can breach Vercel's 10-second serverless timeout on large batches.
+
+        type ContactRow = {
+          workspaceId: string;
+          pageId: string;
+          metaUserId: string;
+          name: string | null;
+          isSubscribed: boolean;
+          lastMessageAt: Date | null;
+        };
+
+        type ConversationRow = {
+          workspaceId: string;
+          pageId: string;
+          metaUserId: string;  // used to look up the contact ID after upsert
+          lastMessageAt: Date | null;
+        };
+
+        type MessageRow = {
+          metaUserId: string;  // to correlate with contact
+          metaMessageId: string;
+          direction: "inbound" | "outbound";
+          messageType: string;
+          content: string | null;
+          status: string;
+          sentAt: Date;
+        };
+
+        const contactRows: ContactRow[] = [];
+        const convRows: ConversationRow[] = [];
+        const messagesByMetaUser: Map<string, MessageRow[]> = new Map();
 
         for (const thread of result.conversations) {
+          // Identify the customer participant (not the page itself)
           const customer = thread.participants.data.find(p => p.id !== page.pageId);
-          if (!customer) continue;
 
-          // Find the most recent inbound message (from user, not page) across all messages in this thread
+          if (!customer) {
+            batchStats.skippedNoCustomer++;
+            // Log the first few skipped threads for diagnosis
+            if (batchStats.skippedNoCustomer <= 3) {
+              console.warn(
+                `[scan] page=${page.pageId} thread=${thread.id} skipped — ` +
+                `no non-page participant. Participants: ` +
+                JSON.stringify(thread.participants.data.map(p => p.id)),
+              );
+            }
+            continue;
+          }
+
           const threadMsgs = thread.messages?.data ?? [];
+
+          // Latest inbound message determines the 24-hour window eligibility
           const latestInboundAt = threadMsgs
             .filter(m => m.from?.id !== page.pageId)
             .reduce<Date | null>((max, m) => {
@@ -68,67 +124,152 @@ export async function POST(
               return max === null || t > max ? t : max;
             }, null);
 
-          const contact = await prisma.contact.upsert({
-            where: { workspaceId_metaUserId: { workspaceId: page.workspaceId, metaUserId: customer.id } },
-            update: { ...(customer.name ? { name: customer.name } : {}) },
-            create: {
-              workspaceId: page.workspaceId,
-              pageId: page.id,
-              metaUserId: customer.id,
-              name: customer.name ?? null,
-              isSubscribed: true,
-              ...(latestInboundAt ? { lastMessageAt: latestInboundAt } : {}),
-            },
-          });
-
-          // Backfill lastMessageAt only when the scan found a newer inbound timestamp
-          // (never overwrite a more recent webhook-set value)
-          if (latestInboundAt) {
-            await prisma.contact.updateMany({
-              where: {
-                id: contact.id,
-                OR: [{ lastMessageAt: null }, { lastMessageAt: { lt: latestInboundAt } }],
-              },
-              data: { lastMessageAt: latestInboundAt },
-            });
-          }
-
-          batchStats.contactsUpserted++;
-
-          const msgs = threadMsgs;
-          const latestMsgTime = msgs.length > 0
-            ? new Date(Math.max(...msgs.map(m => new Date(m.created_time).getTime())))
+          const latestMsgTime = threadMsgs.length > 0
+            ? new Date(Math.max(...threadMsgs.map(m => new Date(m.created_time).getTime())))
             : null;
 
-          const conversation = await prisma.conversation.upsert({
-            where: { pageId_contactId: { pageId: page.id, contactId: contact.id } },
-            update: { ...(latestMsgTime ? { lastMessageAt: latestMsgTime } : {}) },
-            create: {
-              workspaceId: page.workspaceId,
-              pageId: page.id,
-              contactId: contact.id,
-              lastMessageAt: latestMsgTime,
-            },
+          contactRows.push({
+            workspaceId: page.workspaceId,
+            pageId: page.id,
+            metaUserId: customer.id,
+            name: customer.name ?? null,
+            isSubscribed: true,
+            lastMessageAt: latestInboundAt,
           });
-          batchStats.conversationsProcessed++;
 
-          if (msgs.length > 0) {
-            const toInsert = msgs
-              .filter(m => m.id)
-              .map(m => ({
-                conversationId: conversation.id,
-                metaMessageId: m.id,
-                direction: m.from?.id === page.pageId ? "outbound" : "inbound",
-                messageType: "text",
-                content: m.message ?? null,
-                status: m.from?.id === page.pageId ? "sent" : "delivered",
-                sentAt: new Date(m.created_time),
-              }));
+          convRows.push({
+            workspaceId: page.workspaceId,
+            pageId: page.id,
+            metaUserId: customer.id,
+            lastMessageAt: latestMsgTime,
+          });
 
-            if (toInsert.length > 0) {
-              const inserted = await prisma.message.createMany({ data: toInsert, skipDuplicates: true });
-              batchStats.messagesInserted += inserted.count;
-            }
+          if (threadMsgs.length > 0) {
+            messagesByMetaUser.set(
+              customer.id,
+              threadMsgs
+                .filter(m => m.id)
+                .map(m => ({
+                  metaUserId: customer.id,
+                  metaMessageId: m.id,
+                  direction: m.from?.id === page.pageId ? "outbound" : "inbound",
+                  messageType: "text",
+                  content: m.message ?? null,
+                  status: m.from?.id === page.pageId ? "sent" : "delivered",
+                  sentAt: new Date(m.created_time),
+                })),
+            );
+          }
+        }
+
+        // ── Step 1: Upsert all contacts in parallel ───────────────────────────────
+        // IMPORTANT: pageId IS included in the update clause.
+        // Without it, contacts created during a previous page connection (different
+        // internal UUID) retain the old pageId and are NOT counted in _count.contacts
+        // for the current page — causing systematically low contact numbers.
+        const contactUpserts = await Promise.all(
+          contactRows.map(row =>
+            prisma.contact.upsert({
+              where: { workspaceId_metaUserId: { workspaceId: row.workspaceId, metaUserId: row.metaUserId } },
+              update: {
+                // Re-associate with the current page on every scan — this corrects
+                // contacts that were scanned under a different internal page ID
+                // (e.g., after the page was disconnected and reconnected).
+                pageId: row.pageId,
+                ...(row.name ? { name: row.name } : {}),
+              },
+              create: {
+                workspaceId: row.workspaceId,
+                pageId: row.pageId,
+                metaUserId: row.metaUserId,
+                name: row.name,
+                isSubscribed: true,
+              },
+              select: { id: true, metaUserId: true, lastMessageAt: true },
+            }),
+          ),
+        );
+
+        batchStats.contactsUpserted = contactUpserts.length;
+
+        // ── Step 2: Backfill lastMessageAt for contacts that need it ──────────────
+        // Only update when the scan found a newer inbound timestamp than what's stored.
+        const lastMessageAtUpdates = contactRows
+          .map((row, i) => ({ contact: contactUpserts[i], latestInboundAt: row.lastMessageAt }))
+          .filter(({ contact, latestInboundAt }) =>
+            latestInboundAt !== null &&
+            (contact.lastMessageAt === null || contact.lastMessageAt < latestInboundAt),
+          );
+
+        if (lastMessageAtUpdates.length > 0) {
+          await Promise.all(
+            lastMessageAtUpdates.map(({ contact, latestInboundAt }) =>
+              prisma.contact.update({
+                where: { id: contact.id },
+                data: { lastMessageAt: latestInboundAt! },
+              }),
+            ),
+          );
+        }
+
+        // Build a lookup map: metaUserId → contact DB id
+        const contactIdByMetaUserId = new Map(
+          contactUpserts.map(c => [c.metaUserId, c.id]),
+        );
+
+        // ── Step 3: Upsert all conversations in parallel ──────────────────────────
+        await Promise.all(
+          convRows.map(row => {
+            const contactId = contactIdByMetaUserId.get(row.metaUserId);
+            if (!contactId) return Promise.resolve();
+            return prisma.conversation.upsert({
+              where: { pageId_contactId: { pageId: row.pageId, contactId } },
+              update: { ...(row.lastMessageAt ? { lastMessageAt: row.lastMessageAt } : {}) },
+              create: {
+                workspaceId: row.workspaceId,
+                pageId: row.pageId,
+                contactId,
+                lastMessageAt: row.lastMessageAt,
+              },
+              select: { id: true, contactId: true },
+            });
+          }),
+        );
+
+        batchStats.conversationsProcessed = convRows.length;
+
+        // ── Step 4: Fetch conversation IDs for message insertion ──────────────────
+        if (messagesByMetaUser.size > 0) {
+          const contactIds = [...messagesByMetaUser.keys()]
+            .map(uid => contactIdByMetaUserId.get(uid))
+            .filter((cid): cid is string => cid !== undefined);
+
+          const dbConversations = await prisma.conversation.findMany({
+            where: { pageId: page.id, contactId: { in: contactIds } },
+            select: { id: true, contactId: true },
+          });
+
+          const convIdByContactId = new Map(dbConversations.map(c => [c.contactId, c.id]));
+
+          // Bulk-insert all messages across all conversations
+          const allMessages = [...messagesByMetaUser.entries()].flatMap(([metaUserId, msgs]) => {
+            const contactId = contactIdByMetaUserId.get(metaUserId);
+            const conversationId = contactId ? convIdByContactId.get(contactId) : undefined;
+            if (!conversationId) return [];
+            return msgs.map(m => ({
+              conversationId,
+              metaMessageId: m.metaMessageId,
+              direction: m.direction,
+              messageType: m.messageType,
+              content: m.content,
+              status: m.status,
+              sentAt: m.sentAt,
+            }));
+          });
+
+          if (allMessages.length > 0) {
+            const inserted = await prisma.message.createMany({ data: allMessages, skipDuplicates: true });
+            batchStats.messagesInserted = inserted.count;
           }
         }
       }
@@ -143,7 +284,19 @@ export async function POST(
       });
     }
 
-    console.log("[scan] batch complete", { pageId: page.pageId, ...batchStats, hasMore, cursor, nextCursor: nextCursor ?? null, scanError });
+    console.log("[scan] batch complete", {
+      pageId: page.pageId,
+      cursor: cursor ?? "start",
+      nextCursor: nextCursor ?? "done",
+      hasMore,
+      apiThreadsReceived: batchStats.apiThreadsReceived,
+      conversationsProcessed: batchStats.conversationsProcessed,
+      skippedNoCustomer: batchStats.skippedNoCustomer,
+      contactsUpserted: batchStats.contactsUpserted,
+      messagesInserted: batchStats.messagesInserted,
+      scanError,
+    });
+
     return ok({ batchStats, nextCursor, hasMore, error: scanError });
 
   } catch (e) {

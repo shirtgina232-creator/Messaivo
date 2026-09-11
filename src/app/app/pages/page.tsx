@@ -25,6 +25,8 @@ type ScanStats = {
   conversationsProcessed: number;
   contactsUpserted: number;
   messagesInserted: number;
+  apiThreadsReceived: number;   // raw thread count returned by Meta API per batch
+  skippedNoCustomer: number;    // threads discarded because participant matching found no customer
 };
 
 type ScanResult = {
@@ -36,7 +38,7 @@ type ScanResult = {
 
 type ScanProgress = {
   conversations: number;
-  messages: number;
+  apiThreads: number;   // running total of raw API threads received
 };
 
 type BulkScanState = {
@@ -292,9 +294,9 @@ export default function PagesPage() {
     setScanningIds(prev => new Set(prev).add(pageId));
     // Clear previous result; seed progress from zero (or keep existing totals when resuming from error)
     setScanResults(prev => { const n = { ...prev }; delete n[pageId]; return n; });
-    setScanProgress(prev => ({ ...prev, [pageId]: { conversations: 0, messages: 0 } }));
+    setScanProgress(prev => ({ ...prev, [pageId]: { conversations: 0, apiThreads: 0 } }));
 
-    const totals: ScanStats = { conversationsProcessed: 0, contactsUpserted: 0, messagesInserted: 0 };
+    const totals: ScanStats = { conversationsProcessed: 0, contactsUpserted: 0, messagesInserted: 0, apiThreadsReceived: 0, skippedNoCustomer: 0 };
     let cursor: string | null = startCursor;
     let success = false;
 
@@ -331,15 +333,17 @@ export default function PagesPage() {
           break;
         }
 
-        const batch = data.batchStats ?? { conversationsProcessed: 0, contactsUpserted: 0, messagesInserted: 0 };
+        const batch = data.batchStats ?? { conversationsProcessed: 0, contactsUpserted: 0, messagesInserted: 0, apiThreadsReceived: 0, skippedNoCustomer: 0 };
         totals.conversationsProcessed += batch.conversationsProcessed;
         totals.contactsUpserted       += batch.contactsUpserted;
         totals.messagesInserted       += batch.messagesInserted;
+        totals.apiThreadsReceived     += (batch.apiThreadsReceived ?? 0);
+        totals.skippedNoCustomer      += (batch.skippedNoCustomer ?? 0);
 
         // Update live progress display
         setScanProgress(prev => ({
           ...prev,
-          [pageId]: { conversations: totals.conversationsProcessed, messages: totals.messagesInserted },
+          [pageId]: { conversations: totals.conversationsProcessed, apiThreads: totals.apiThreadsReceived },
         }));
 
         if (!data.hasMore) {
@@ -602,8 +606,8 @@ export default function PagesPage() {
                   <div className="mt-auto pt-2 border-t" style={{ borderColor: "rgba(255,255,255,0.05)" }}>
                     <div className="flex items-center gap-1.5 text-[11px]" style={{ color: "#8B85FF" }}>
                       <Loader2 size={9} className="animate-spin shrink-0" />
-                      {progress && progress.conversations > 0
-                        ? <>Fetching all conversations… <strong>{progress.conversations.toLocaleString()}</strong> so far</>
+                      {progress && progress.apiThreads > 0
+                        ? <>{progress.apiThreads.toLocaleString()} conversations fetched from Meta…</>
                         : "Connecting to Meta API…"}
                     </div>
                   </div>
@@ -612,14 +616,21 @@ export default function PagesPage() {
                     {result.error ? (
                       <span className="text-[11px]" style={{ color: "#EF4444" }}>
                         {result.nextCursor
-                          ? <>Paused at {result.stats.conversationsProcessed.toLocaleString()} conversations — click <RefreshCw size={9} className="inline" /> to resume</>
+                          ? <>Paused at {result.stats.conversationsProcessed.toLocaleString()} — click <RefreshCw size={9} className="inline" /> to resume</>
                           : `Error: ${result.error}`}
                       </span>
                     ) : (
-                      <span className="text-[11px]" style={{ color: "#10B981" }}>
-                        ✓ {result.stats.conversationsProcessed.toLocaleString()} conversation{result.stats.conversationsProcessed !== 1 ? "s" : ""} scanned
-                        {result.stats.messagesInserted > 0 && <>, {result.stats.messagesInserted.toLocaleString()} messages imported</>}
-                      </span>
+                      <div className="flex flex-col gap-0.5">
+                        <span className="text-[11px]" style={{ color: "#10B981" }}>
+                          ✓ Scan complete — {result.stats.conversationsProcessed.toLocaleString()} contacts saved
+                        </span>
+                        {result.stats.apiThreadsReceived > 0 && (
+                          <span className="text-[10.5px]" style={{ color: "rgba(139,149,167,0.7)" }}>
+                            {result.stats.apiThreadsReceived.toLocaleString()} threads from Meta API
+                            {result.stats.skippedNoCustomer > 0 && `, ${result.stats.skippedNoCustomer} skipped`}
+                          </span>
+                        )}
+                      </div>
                     )}
                   </div>
                 ) : p.lastScannedAt ? (
