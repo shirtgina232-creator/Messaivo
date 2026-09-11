@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { Plus, X, WifiOff, ArrowRight, RefreshCw, Trash2, Check, AlertCircle, Info } from "lucide-react";
+import { Plus, X, WifiOff, ArrowRight, RefreshCw, Trash2, Check, AlertCircle, Info, Loader2, CheckCircle2 } from "lucide-react";
 import { useWorkspace, derivedPageColor, derivedPageAvatar } from "@/lib/workspace-context";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -36,6 +36,15 @@ type ScanResult = {
 type ScanProgress = {
   conversations: number;
   messages: number;
+};
+
+type BulkScanState = {
+  active: boolean;
+  total: number;
+  completed: number;
+  successful: number;
+  failed: number;
+  done: boolean;
 };
 
 // ── Error messages ────────────────────────────────────────────────────────────
@@ -237,6 +246,7 @@ export default function PagesPage() {
   const [scanningIds, setScanningIds]   = useState<Set<string>>(new Set());
   const [scanResults, setScanResults]   = useState<Record<string, ScanResult>>({});
   const [scanProgress, setScanProgress] = useState<Record<string, ScanProgress>>({});
+  const [bulkScan, setBulkScan]         = useState<BulkScanState | null>(null);
 
   // Fetch all pages (active + inactive) — used for both the grid and the select modal
   const fetchAll = useCallback(() => {
@@ -276,8 +286,8 @@ export default function PagesPage() {
     fetchAll();
   };
 
-  const handleScan = async (pageId: string, startCursor: string | null = null) => {
-    if (scanningIds.has(pageId)) return;
+  const handleScan = async (pageId: string, startCursor: string | null = null): Promise<boolean> => {
+    if (scanningIds.has(pageId)) return false;
     setScanningIds(prev => new Set(prev).add(pageId));
     // Clear previous result; seed progress from zero (or keep existing totals when resuming from error)
     setScanResults(prev => { const n = { ...prev }; delete n[pageId]; return n; });
@@ -285,6 +295,7 @@ export default function PagesPage() {
 
     const totals: ScanStats = { conversationsProcessed: 0, contactsUpserted: 0, messagesInserted: 0 };
     let cursor: string | null = startCursor;
+    let success = false;
 
     try {
       while (true) {
@@ -336,6 +347,7 @@ export default function PagesPage() {
             [pageId]: { stats: { ...totals }, hasMore: false, nextCursor: null, error: null },
           }));
           fetchAll();
+          success = true;
           break;
         }
 
@@ -347,6 +359,30 @@ export default function PagesPage() {
     } finally {
       setScanningIds(prev => { const n = new Set(prev); n.delete(pageId); return n; });
     }
+
+    return success;
+  };
+
+  const handleScanAll = async () => {
+    if (bulkScan?.active) return;
+    // Only scan pages that aren't already being scanned individually
+    const pagesToScan = activePages.filter(p => !scanningIds.has(p.id));
+    if (pagesToScan.length === 0) return;
+
+    setBulkScan({ active: true, total: pagesToScan.length, completed: 0, successful: 0, failed: 0, done: false });
+
+    let successful = 0;
+    let failed = 0;
+
+    for (const page of pagesToScan) {
+      const ok = await handleScan(page.id, null);
+      if (ok) successful++; else failed++;
+      const completed = successful + failed;
+      setBulkScan({ active: true, total: pagesToScan.length, completed, successful, failed, done: false });
+    }
+
+    setBulkScan({ active: false, total: pagesToScan.length, completed: pagesToScan.length, successful, failed, done: true });
+    fetchAll();
   };
 
   const pageToDisconnect = allPages.find(p => p.id === disconnecting);
@@ -369,24 +405,91 @@ export default function PagesPage() {
         </div>
       )}
 
-      <div className="flex items-start justify-between mb-6">
+      <div className="flex items-start justify-between mb-4">
         <div>
           <h1 className="text-[20px] font-semibold mb-1" style={{ color: "#F5F7FA" }}>Facebook Pages</h1>
           <p className="text-[13px]" style={{ color: "#8B95A7" }}>
             {activePages.length} of {plan.pageLimit} page{plan.pageLimit !== 1 ? "s" : ""} connected on your {plan.name} plan.
           </p>
         </div>
-        <button
-          onClick={handleConnectClick}
-          className="flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-semibold text-white"
-          style={{ background: "#1877F2" }}
-        >
-          <svg viewBox="0 0 24 24" width="13" height="13" fill="white">
-            <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
-          </svg>
-          Connect Page
-        </button>
+        <div className="flex items-center gap-2">
+          {activePages.length > 0 && (
+            <button
+              onClick={handleScanAll}
+              disabled={bulkScan?.active}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-semibold"
+              style={{
+                background: bulkScan?.active ? "rgba(108,99,255,0.12)" : "rgba(108,99,255,0.15)",
+                border: "1px solid rgba(108,99,255,0.3)",
+                color: bulkScan?.active ? "#8B85FF" : "#A09BFF",
+                opacity: bulkScan?.active ? 0.75 : 1,
+              }}
+            >
+              {bulkScan?.active
+                ? <><Loader2 size={13} className="animate-spin" /> Scanning {bulkScan.completed}/{bulkScan.total}…</>
+                : <><RefreshCw size={13} /> Scan All Pages</>}
+            </button>
+          )}
+          <button
+            onClick={handleConnectClick}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-semibold text-white"
+            style={{ background: "#1877F2" }}
+          >
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="white">
+              <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+            </svg>
+            Connect Page
+          </button>
+        </div>
       </div>
+
+      {/* Bulk scan — live progress banner */}
+      {bulkScan?.active && (
+        <div className="mb-4 px-4 py-3 rounded-xl flex items-center gap-3"
+          style={{ background: "rgba(108,99,255,0.08)", border: "1px solid rgba(108,99,255,0.2)" }}>
+          <Loader2 size={14} className="animate-spin shrink-0" style={{ color: "#8B85FF" }} />
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[12.5px] font-medium" style={{ color: "#C4BFFF" }}>
+                Scanning Pages — {bulkScan.completed} / {bulkScan.total} completed
+              </span>
+              <span className="text-[11.5px]" style={{ color: "#8B95A7" }}>
+                {bulkScan.successful > 0 && <span style={{ color: "#10B981" }}>{bulkScan.successful} done</span>}
+                {bulkScan.failed > 0 && <>{bulkScan.successful > 0 && " · "}<span style={{ color: "#EF4444" }}>{bulkScan.failed} failed</span></>}
+              </span>
+            </div>
+            <div className="h-1 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.07)" }}>
+              <div
+                className="h-full rounded-full transition-all duration-500"
+                style={{ width: `${Math.round((bulkScan.completed / bulkScan.total) * 100)}%`, background: "#6C63FF" }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk scan — summary banner (shown when done, dismissible) */}
+      {bulkScan?.done && (
+        <div className="mb-4 px-4 py-3 rounded-xl flex items-center gap-3"
+          style={{
+            background: bulkScan.failed > 0 ? "rgba(245,158,11,0.08)" : "rgba(16,185,129,0.08)",
+            border: `1px solid ${bulkScan.failed > 0 ? "rgba(245,158,11,0.25)" : "rgba(16,185,129,0.2)"}`,
+          }}>
+          <CheckCircle2 size={15} className="shrink-0" style={{ color: bulkScan.failed > 0 ? "#F59E0B" : "#10B981" }} />
+          <span className="flex-1 text-[12.5px] font-medium" style={{ color: "#F5F7FA" }}>
+            {bulkScan.total} page{bulkScan.total !== 1 ? "s" : ""} scanned
+            {" — "}<span style={{ color: "#10B981" }}>{bulkScan.successful} successful</span>
+            {bulkScan.failed > 0 && <>{", "}<span style={{ color: "#EF4444" }}>{bulkScan.failed} failed</span></>}
+          </span>
+          <button
+            onClick={() => setBulkScan(null)}
+            className="p-1 rounded-lg hover:bg-white/5 shrink-0"
+            style={{ color: "#8B95A7" }}
+          >
+            <X size={13} />
+          </button>
+        </div>
+      )}
 
       {loadingAll && activePages.length === 0 ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
