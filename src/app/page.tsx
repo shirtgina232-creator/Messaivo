@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Navbar from "@/components/Navbar";
 import Hero from "@/components/Hero";
+import MascotLayer from "@/components/MascotLayer";
 import SocialProof from "@/components/SocialProof";
 import ProblemSection from "@/components/ProblemSection";
 import ProductFlow from "@/components/ProductFlow";
@@ -23,6 +24,7 @@ export const metadata: Metadata = {
 export default function Home() {
   return (
     <>
+      <MascotLayer />
       <Navbar />
       <main>
         <Hero />

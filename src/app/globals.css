@@ -127,3 +127,48 @@ body {
 .animate-float       { animation: float 6s ease-in-out infinite; }
 .animate-pulse-dot   { animation: pulse-dot 2s ease-in-out infinite; }
 .animate-fade-up     { animation: fade-up .6s ease-out forwards; }
+
+/* ── Mascot animations ──────────────────────────────────────────── */
+@keyframes mascot-bob {
+  0%,  100% { transform: translateY(0px)   rotate(0deg);    }
+  30%        { transform: translateY(-4px)  rotate(-1.5deg); }
+  65%        { transform: translateY(2px)   rotate(1deg);    }
+}
+
+/* ── CTA button shimmer on hover ────────────────────────────────── */
+@keyframes cta-sweep {
+  from { transform: translateX(-110%) skewX(-18deg); }
+  to   { transform: translateX(220%)  skewX(-18deg); }
+}
+
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  a[href="/signup"],
+  a[href="/login"] {
+    position: relative;
+    overflow: hidden;
+  }
+  a[href="/signup"]::after,
+  a[href="/login"]::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    width: 55%;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgba(255, 255, 255, 0.11),
+      transparent
+    );
+    transform: translateX(-110%) skewX(-18deg);
+    pointer-events: none;
+  }
+  a[href="/signup"]:hover::after,
+  a[href="/login"]:hover::after {
+    animation: cta-sweep 0.52s ease-out forwards;
+  }
+  a[href="/signup"]:hover,
+  a[href="/login"]:hover {
+    transform: scale(1.018);
+    transition: transform 0.15s ease, background 0.15s ease, box-shadow 0.15s ease !important;
+  }
+}
