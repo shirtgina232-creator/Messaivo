@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Menu, X } from "lucide-react";
 import ThemeToggle from "./ThemeToggle";
 import { MessaivoLogo } from "./MessaivoLogo";
+import { useTheme } from "./ThemeProvider";
 
 const navLinks = [
   { label: "Features",  href: "/features" },
@@ -13,6 +14,7 @@ const navLinks = [
 ];
 
 export default function Navbar() {
+  const { theme } = useTheme();
   const [scrolled, setScrolled]   = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -38,7 +40,7 @@ export default function Navbar() {
         <nav className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
           {/* Logo */}
           <Link href="/" className="flex items-center">
-            <MessaivoLogo theme="dark" height={30} />
+            <MessaivoLogo theme={theme === "dark" ? "light" : "dark"} height={30} />
           </Link>
 
           {/* Desktop nav links */}
