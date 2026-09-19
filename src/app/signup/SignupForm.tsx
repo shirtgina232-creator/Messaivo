@@ -31,17 +31,27 @@ export default function SignupForm({
   const [pendingVerification, setPendingVerification] = useState(false);
   const [code, setCode] = useState("");
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!name || !email || !password) { setError("Please fill in all fields."); return; }
-    if (password.length < 8) { setError("Password must be at least 8 characters."); return; }
+    // Browser autofill bypasses React onChange on controlled inputs.
+    const fd = new FormData(e.currentTarget);
+    const nameVal  = name  || (fd.get("name")  as string) || "";
+    const emailVal = email || (fd.get("email") as string) || "";
+    const pwVal    = password || (fd.get("new-password") as string) || "";
+    if (!nameVal || !emailVal || !pwVal) { setError("Please fill in all fields."); return; }
+    if (pwVal.length < 8) { setError("Password must be at least 8 characters."); return; }
 
     setError("");
 
     try {
+      const [firstName, ...rest] = nameVal.trim().split(/\s+/);
+      const lastName = rest.length > 0 ? rest.join(" ") : undefined;
+
       const { error: createError } = await signUp.create({
-        emailAddress: email,
-        password,
+        emailAddress: emailVal,
+        password: pwVal,
+        firstName,
+        lastName,
       });
 
       if (createError) {
@@ -126,6 +136,8 @@ export default function SignupForm({
                     value={name}
                     onChange={e => setName(e.target.value)}
                     placeholder="Your name"
+                    name="name"
+                    autoComplete="name"
                     className="w-full px-3 py-2.5 rounded-lg text-[13.5px] outline-none"
                     style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" }}
                   />
@@ -137,6 +149,8 @@ export default function SignupForm({
                     value={email}
                     onChange={e => setEmail(e.target.value)}
                     placeholder="you@company.com"
+                    name="email"
+                    autoComplete="email"
                     className="w-full px-3 py-2.5 rounded-lg text-[13.5px] outline-none"
                     style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" }}
                   />
@@ -149,6 +163,8 @@ export default function SignupForm({
                       value={password}
                       onChange={e => setPassword(e.target.value)}
                       placeholder="Min. 8 characters"
+                      name="new-password"
+                      autoComplete="new-password"
                       className="w-full px-3 py-2.5 pr-10 rounded-lg text-[13.5px] outline-none"
                       style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" }}
                     />

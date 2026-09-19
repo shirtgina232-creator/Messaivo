@@ -25,11 +25,13 @@ const inputStyle: React.CSSProperties = {
 };
 const inputCls = "w-full px-3 py-2.5 rounded-lg text-[13.5px] outline-none transition-all";
 
-function PwInput({ value, onChange, placeholder = "••••••••", autoFocus }: {
+function PwInput({ value, onChange, placeholder = "••••••••", autoFocus, name, autoComplete }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   autoFocus?: boolean;
+  name?: string;
+  autoComplete?: string;
 }) {
   const [show, setShow] = useState(false);
   return (
@@ -40,6 +42,8 @@ function PwInput({ value, onChange, placeholder = "••••••••", au
         onChange={e => onChange(e.target.value)}
         placeholder={placeholder}
         autoFocus={autoFocus}
+        name={name}
+        autoComplete={autoComplete}
         className={`${inputCls} pr-10`}
         style={inputStyle}
       />
@@ -87,12 +91,17 @@ export default function LoginForm({
   }
 
   // ── SIGN IN ────────────────────────────────────────────────────────────────
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!email || !password) { setError("Please fill in all fields."); return; }
+    // Browser autofill bypasses React onChange on controlled inputs.
+    // Read the real DOM value via FormData as a fallback.
+    const fd = new FormData(e.currentTarget);
+    const emailVal = email || (fd.get("email") as string) || "";
+    const pwVal    = password || (fd.get("password") as string) || "";
+    if (!emailVal || !pwVal) { setError("Please fill in all fields."); return; }
     setError("");
     try {
-      const { error: err } = await signIn!.password({ emailAddress: email, password });
+      const { error: err } = await signIn!.password({ emailAddress: emailVal, password: pwVal });
       if (err) { setError(err.message ?? "Invalid email or password."); return; }
       if (signIn!.status === "complete") {
         const { error: finalErr } = await signIn!.finalize();
@@ -227,6 +236,7 @@ export default function LoginForm({
                   <input
                     type="email" value={email} onChange={e => setEmail(e.target.value)}
                     placeholder="you@company.com" className={inputCls} style={inputStyle}
+                    name="email" autoComplete="email"
                   />
                 </div>
                 <div>
@@ -241,7 +251,7 @@ export default function LoginForm({
                       Forgot password?
                     </button>
                   </div>
-                  <PwInput value={password} onChange={setPassword} />
+                  <PwInput value={password} onChange={setPassword} name="password" autoComplete="current-password" />
                 </div>
 
                 {error && <p className="text-[12px] text-red-400">{error}</p>}
@@ -272,6 +282,7 @@ export default function LoginForm({
                   <input
                     type="email" value={resetEmail} onChange={e => setResetEmail(e.target.value)}
                     placeholder="you@company.com" className={inputCls} style={inputStyle} autoFocus
+                    name="email" autoComplete="email"
                   />
                 </div>
 
@@ -351,13 +362,13 @@ export default function LoginForm({
                       <label className="text-[12px] font-medium block mb-1.5" style={{ color: "#8B95A7" }}>
                         New password
                       </label>
-                      <PwInput value={newPw} onChange={setNewPw} placeholder="Min. 8 characters" autoFocus />
+                      <PwInput value={newPw} onChange={setNewPw} placeholder="Min. 8 characters" autoFocus name="new-password" autoComplete="new-password" />
                     </div>
                     <div>
                       <label className="text-[12px] font-medium block mb-1.5" style={{ color: "#8B95A7" }}>
                         Confirm password
                       </label>
-                      <PwInput value={confirmPw} onChange={setConfirmPw} />
+                      <PwInput value={confirmPw} onChange={setConfirmPw} name="confirm-password" autoComplete="new-password" />
                     </div>
 
                     {error && <p className="text-[12px] text-red-400">{error}</p>}
