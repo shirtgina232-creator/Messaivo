@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { getWorkspace } from "@/lib/api-helpers";
 import { prisma } from "@/lib/db";
 import { encryptToken } from "@/lib/token-crypto";
 import { metaCallbackUrl } from "@/lib/meta-oauth";
@@ -67,11 +66,23 @@ export async function GET(req: Request) {
     return redirect(req, "invalid_callback");
   }
 
-  // ── CSRF ──────────────────────────────────────────────────────────────────────
+  // ── CSRF + userId extraction ───────────────────────────────────────────────────
+  // Cookie format: "${stateNonce}:${clerkUserId}" — set by /api/auth/meta.
+  // We compare only the nonce (echoed by Facebook) for CSRF protection.
+  // The clerkUserId lets us resolve the workspace without needing auth() here:
+  // Clerk's cross-origin handshake makes auth() unavailable during the Facebook
+  // redirect-back (cross-origin Referer triggers shouldForceHandshakeForCrossDomain).
   const jar = await cookies();
-  const savedState = jar.get("meta_oauth_state")?.value;
-  if (!savedState || savedState !== state) {
-    console.warn("[meta/callback] CSRF state mismatch — expired or replayed session", { hasSavedState: !!savedState });
+  const savedCookie = jar.get("meta_oauth_state")?.value;
+  const colonIdx = savedCookie?.indexOf(":") ?? -1;
+  const savedNonce   = colonIdx >= 0 ? savedCookie!.slice(0, colonIdx) : savedCookie;
+  const savedClerkId = colonIdx >= 0 ? savedCookie!.slice(colonIdx + 1) : undefined;
+  if (!savedNonce || savedNonce !== state) {
+    console.warn("[meta/callback] CSRF state mismatch — expired or replayed session", { hasSavedCookie: !!savedCookie });
+    return redirect(req, "invalid_state");
+  }
+  if (!savedClerkId) {
+    console.warn("[meta/callback] No clerkId in state cookie — flow may have been initiated without auth");
     return redirect(req, "invalid_state");
   }
 
@@ -103,11 +114,18 @@ export async function GET(req: Request) {
   const cbUrl = metaCallbackUrl(req);
 
   try {
-    // ── Workspace ──────────────────────────────────────────────────────────────
-    const ws = await getWorkspace();
+    // ── Workspace — resolved via userId from state cookie, not from auth() ──────
+    // auth() is unavailable here: Clerk's cross-origin handshake intercepts the
+    // Facebook redirect-back before this handler runs. savedClerkId (from the
+    // httpOnly CSRF cookie set at OAuth initiation) is the safe alternative.
+    const dbUser = await prisma.user.findUnique({
+      where: { clerkId: savedClerkId },
+      include: { workspace: true },
+    });
+    const ws = dbUser?.workspace ?? null;
     if (!ws) {
-      console.warn("[meta/callback] No workspace — user not authenticated (Clerk session missing)");
-      const res = NextResponse.redirect(new URL("/login", req.url));
+      console.warn("[meta/callback] No workspace found for clerkId from state cookie", { clerkId: savedClerkId });
+      const res = NextResponse.redirect(new URL("/app/pages?error=session_expired", req.url));
       res.cookies.delete("meta_oauth_state");
       return res;
     }
