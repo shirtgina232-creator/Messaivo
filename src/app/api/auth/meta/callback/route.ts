@@ -50,6 +50,7 @@ async function fetchJson<T>(url: string): Promise<FetchResult<T>> {
 // ── Route handler ─────────────────────────────────────────────────────────────
 
 export async function GET(req: Request) {
+  console.log("[meta/callback] ENTRY", { url: req.url.split("?")[0], hasCode: !!new URL(req.url).searchParams.get("code"), hasState: !!new URL(req.url).searchParams.get("state") });
   const url    = new URL(req.url);
   const code   = url.searchParams.get("code");
   const state  = url.searchParams.get("state");

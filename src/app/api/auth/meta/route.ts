@@ -4,8 +4,12 @@ import { randomBytes } from "crypto";
 import { metaCallbackUrl } from "@/lib/meta-oauth";
 
 export async function GET(req: Request) {
-  const { userId } = await auth();
+  console.log("[meta/oauth] ENTRY", { url: req.url, referer: (req as Request & { headers: Headers }).headers?.get?.("referer") ?? "none" });
+  const authResult = await auth();
+  const { userId } = authResult;
+  console.log("[meta/oauth] auth()", { hasUserId: !!userId });
   if (!userId) {
+    console.warn("[meta/oauth] no userId — redirecting to /login");
     return NextResponse.redirect(new URL("/login", req.url));
   }
 
