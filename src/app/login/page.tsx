@@ -5,7 +5,10 @@ import { isAdminRole } from "@/lib/admin-helpers";
 import LoginForm from "@/app/login/LoginForm";
 
 export default async function LoginPage() {
-  const { userId: clerkId } = await auth();
+  // treatPendingAsSignedOut: pending sessions (incomplete social sign-up) must NOT
+  // redirect to /app because auth.protect() there rejects them, creating a login↔app loop
+  // that Clerk breaks by redirecting to /signup.
+  const { userId: clerkId } = await auth({ treatPendingAsSignedOut: true });
   if (clerkId) {
     const user = await prisma.user.findUnique({ where: { clerkId }, select: { role: true } });
     redirect(user?.role && isAdminRole(user.role) ? "/admin" : "/app");

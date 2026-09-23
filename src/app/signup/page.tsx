@@ -4,8 +4,9 @@ import { prisma } from "@/lib/db";
 import SignupForm from "@/app/signup/SignupForm";
 
 export default async function SignupPage() {
-  const { userId: clerkId } = await auth();
-  if (clerkId) redirect("/app");
+  const { userId: clerkId, sessionStatus } = await auth();
+  // Only redirect a fully signed-in user; pending (social sign-up in progress) stays here to complete.
+  if (clerkId && sessionStatus !== "pending") redirect("/app");
 
   let heading = "Create your account";
   let description = "Start managing customer conversations with Messaivo.";
