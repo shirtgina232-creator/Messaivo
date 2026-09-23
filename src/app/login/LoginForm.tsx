@@ -99,12 +99,13 @@ export default function LoginForm({
     const emailVal = email || (fd.get("email") as string) || "";
     const pwVal    = password || (fd.get("password") as string) || "";
     if (!emailVal || !pwVal) { setError("Please fill in all fields."); return; }
+    if (!signIn) { setError("Login is not available yet. Please refresh the page."); return; }
     setError("");
     try {
-      const { error: err } = await signIn!.password({ emailAddress: emailVal, password: pwVal });
+      const { error: err } = await signIn.password({ emailAddress: emailVal, password: pwVal });
       if (err) { setError(err.message ?? "Invalid email or password."); return; }
-      if (signIn!.status === "complete") {
-        const { error: finalErr } = await signIn!.finalize();
+      if (signIn.status === "complete") {
+        const { error: finalErr } = await signIn.finalize();
         if (finalErr) { setError(finalErr.message ?? "Failed to activate session."); return; }
         try {
           const res = await fetch("/api/auth/role");
@@ -113,6 +114,10 @@ export default function LoginForm({
         } catch {
           router.push("/app");
         }
+      } else if (signIn.status === "needs_second_factor") {
+        setError("This account requires two-factor authentication, which is not supported here yet.");
+      } else {
+        setError("Sign-in could not be completed. Please try again.");
       }
     } catch {
       setError("Invalid email or password.");
@@ -123,13 +128,14 @@ export default function LoginForm({
   const handleSendCode = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!resetEmail) { setError("Please enter your email address."); return; }
+    if (!signIn) { setError("Login is not available yet. Please refresh the page."); return; }
     setError("");
     setBusy(true);
     try {
-      const { error: createErr } = await signIn!.create({ identifier: resetEmail });
+      const { error: createErr } = await signIn.create({ identifier: resetEmail });
       if (createErr) { setError(createErr.message ?? "No account found with that email."); return; }
 
-      const { error: sendErr } = await signIn!.resetPasswordEmailCode.sendCode();
+      const { error: sendErr } = await signIn.resetPasswordEmailCode.sendCode();
       if (sendErr) { setError(sendErr.message ?? "Failed to send reset code. Try again."); return; }
 
       // Move to verify view — code is now in flight
@@ -148,10 +154,11 @@ export default function LoginForm({
   const handleVerifyCode = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!code) { setError("Please enter the verification code."); return; }
+    if (!signIn) { setError("Session expired. Please start over."); return; }
     setError("");
     setBusy(true);
     try {
-      const { error: verifyErr } = await signIn!.resetPasswordEmailCode.verifyCode({ code });
+      const { error: verifyErr } = await signIn.resetPasswordEmailCode.verifyCode({ code });
       if (verifyErr) { setError(verifyErr.message ?? "Invalid or expired code. Try again."); return; }
       // Reveal password fields without changing view
       setCodeVerified(true);
@@ -169,12 +176,29 @@ export default function LoginForm({
     if (!newPw || !confirmPw)  { setError("Please fill in both password fields."); return; }
     if (newPw !== confirmPw)   { setError("Passwords do not match."); return; }
     if (newPw.length < 8)      { setError("Password must be at least 8 characters."); return; }
+    if (!signIn) { setError("Session expired. Please start the reset process again."); return; }
     setError("");
     setBusy(true);
     try {
-      const { error: pwErr } = await signIn!.resetPasswordEmailCode.submitPassword({ password: newPw });
+      const { error: pwErr } = await signIn.resetPasswordEmailCode.submitPassword({ password: newPw });
       if (pwErr) { setError(pwErr.message ?? "Failed to set password. Please try again."); return; }
-      // Password reset successful — go to login
+      // Password changed — if sign-in is now complete, activate the session and go to app.
+      // Without finalize() the session stays in a completed-but-inactive state, causing the
+      // form to appear stuck. Auto-signing-in after reset is the expected UX for this flow.
+      if (signIn.status === "complete") {
+        const { error: finalErr } = await signIn.finalize();
+        if (!finalErr) {
+          try {
+            const res = await fetch("/api/auth/role");
+            const { role } = (await res.json()) as { role: string | null };
+            router.push(["SUPER_ADMIN", "ADMIN", "SUPPORT", "FINANCE"].includes(role ?? "") ? "/admin" : "/app");
+          } catch {
+            router.push("/app");
+          }
+          return;
+        }
+      }
+      // finalize failed or status not complete — go to login so user can sign in manually
       router.push("/login?reset=success");
     } catch {
       setError("Something went wrong. Please start over.");
