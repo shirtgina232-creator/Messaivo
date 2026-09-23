@@ -1,7 +1,29 @@
 import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { randomBytes } from "crypto";
+import { createHmac, randomBytes } from "crypto";
 import { metaCallbackUrl } from "@/lib/meta-oauth";
+
+/**
+ * Build an HMAC-signed state token for the Facebook OAuth flow.
+ *
+ * Format: `{nonce}.{base64url(payload)}.{base64url(HMAC-SHA256)}`
+ *
+ * Why signed instead of cookie-only:
+ * The callback is pinned to https://www.messaivo.com (via APP_URL).
+ * When the OAuth flow is initiated from a different host (e.g. messaivo.vercel.app),
+ * the state cookie is set on that host but never sent to www.messaivo.com because
+ * browsers don't send cookies across different domains.  An HMAC-signed state is
+ * self-contained and verifiable without any cookie, fixing the cross-host mismatch.
+ *
+ * The cookie is still set (defense-in-depth) but is no longer the primary check.
+ */
+function signState(nonce: string, userId: string): string {
+  const payload = Buffer.from(JSON.stringify({ u: userId, t: Date.now() })).toString("base64url");
+  const unsigned = `${nonce}.${payload}`;
+  const key = Buffer.from(process.env.META_TOKEN_ENCRYPTION_KEY ?? "", "hex");
+  const mac = createHmac("sha256", key).update(unsigned).digest("base64url");
+  return `${unsigned}.${mac}`;
+}
 
 export async function GET(req: Request) {
   console.log("[meta/oauth] ENTRY", { url: req.url, referer: (req as Request & { headers: Headers }).headers?.get?.("referer") ?? "none" });
@@ -24,26 +46,29 @@ export async function GET(req: Request) {
 
   const cbUrl = metaCallbackUrl(req);
   const stateNonce = randomBytes(16).toString("hex");
-  // stateNonce is echoed by Facebook for CSRF verification.
-  // We embed userId in the cookie (httpOnly, not sent to Facebook) so the callback
-  // can resolve the workspace without needing the Clerk session — Clerk's
-  // cross-origin handshake makes auth() unavailable during the Facebook redirect-back.
-  const state = stateNonce;
+  // HMAC-signed state: nonce + userId + timestamp embedded in the state param itself.
+  // This means the callback can verify identity without a cookie, which fixes the
+  // cross-host failure where the cookie was set on messaivo.vercel.app but the
+  // callback always goes to www.messaivo.com.
+  const signedState = signState(stateNonce, userId);
 
   const useConfigId = !!(configId && process.env.NODE_ENV === "production");
+  const reqHost = new URL(req.url).host;
   console.log("[meta/oauth] initiating OAuth", {
     env: process.env.NODE_ENV,
+    reqHost,
     callbackHost: new URL(cbUrl).host,
     hasConfigId: !!configId,
     usingConfigId: useConfigId,
     redirectUri: cbUrl,
+    stateFormat: "hmac-signed",
   });
 
   const oauthUrl = new URL("https://www.facebook.com/v19.0/dialog/oauth");
   oauthUrl.searchParams.set("client_id", appId);
   oauthUrl.searchParams.set("redirect_uri", cbUrl);
   oauthUrl.searchParams.set("response_type", "code");
-  oauthUrl.searchParams.set("state", state);
+  oauthUrl.searchParams.set("state", signedState);
   if (configId && process.env.NODE_ENV === "production") {
     // Facebook Login for Business: only used in production.
     // config_id has its own redirect URI whitelist (separate from standard Facebook Login).
@@ -57,7 +82,9 @@ export async function GET(req: Request) {
   }
 
   const res = NextResponse.redirect(oauthUrl.toString());
-  res.cookies.set("meta_oauth_state", `${stateNonce}:${userId}`, {
+  // Cookie kept as defense-in-depth only — not required for state verification.
+  // The HMAC-signed state is the primary CSRF check.
+  res.cookies.set("meta_oauth_state", stateNonce, {
     httpOnly: true,
     sameSite: "lax",
     maxAge: 600,

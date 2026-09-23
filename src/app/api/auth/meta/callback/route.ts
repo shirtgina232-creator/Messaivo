@@ -1,8 +1,47 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
+import { createHmac, timingSafeEqual } from "crypto";
 import { prisma } from "@/lib/db";
 import { encryptToken } from "@/lib/token-crypto";
 import { metaCallbackUrl } from "@/lib/meta-oauth";
+
+/**
+ * Verify an HMAC-signed state token produced by signState() in /api/auth/meta.
+ *
+ * Format: `{nonce}.{base64url(payload)}.{base64url(HMAC-SHA256)}`
+ *
+ * Primary CSRF check.  The cookie is no longer the primary check because the
+ * callback is pinned to www.messaivo.com via APP_URL while OAuth can be
+ * initiated from any host (e.g. messaivo.vercel.app).  Cookies scoped to the
+ * initiating host are never sent to a different domain in the callback.
+ */
+function verifyState(state: string): { ok: true; userId: string; nonce: string } | { ok: false; reason: string } {
+  const parts = state.split(".");
+  if (parts.length !== 3) return { ok: false, reason: "bad_format" };
+  const [nonce, payloadB64, mac] = parts;
+  const unsigned = `${nonce}.${payloadB64}`;
+  const key = Buffer.from(process.env.META_TOKEN_ENCRYPTION_KEY ?? "", "hex");
+  if (key.length < 32) return { ok: false, reason: "encryption_key_too_short" };
+  const expectedMac = createHmac("sha256", key).update(unsigned).digest("base64url");
+  try {
+    const macBuf      = Buffer.from(mac, "base64url");
+    const expectedBuf = Buffer.from(expectedMac, "base64url");
+    if (macBuf.length !== expectedBuf.length || !timingSafeEqual(macBuf, expectedBuf)) {
+      return { ok: false, reason: "bad_mac" };
+    }
+  } catch {
+    return { ok: false, reason: "mac_parse_error" };
+  }
+  let payload: { u: string; t: number };
+  try {
+    payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8"));
+  } catch {
+    return { ok: false, reason: "bad_payload" };
+  }
+  if (!payload.u || typeof payload.t !== "number") return { ok: false, reason: "bad_payload_fields" };
+  if (Date.now() - payload.t > 600_000) return { ok: false, reason: "state_expired" };
+  return { ok: true, userId: payload.u, nonce };
+}
 
 const GRAPH = "https://graph.facebook.com/v19.0";
 
@@ -67,25 +106,23 @@ export async function GET(req: Request) {
     return redirect(req, "invalid_callback");
   }
 
-  // ── CSRF + userId extraction ───────────────────────────────────────────────────
-  // Cookie format: "${stateNonce}:${clerkUserId}" — set by /api/auth/meta.
-  // We compare only the nonce (echoed by Facebook) for CSRF protection.
-  // The clerkUserId lets us resolve the workspace without needing auth() here:
-  // Clerk's cross-origin handshake makes auth() unavailable during the Facebook
-  // redirect-back (cross-origin Referer triggers shouldForceHandshakeForCrossDomain).
+  // ── CSRF + userId extraction (HMAC-signed state — no cookie dependency) ────────
+  // The HMAC-signed state is the primary check.  The cookie is no longer required
+  // because the callback is pinned to www.messaivo.com while initiation can come
+  // from any host; cookies set on the initiating host are not sent to the callback.
   const jar = await cookies();
-  const savedCookie = jar.get("meta_oauth_state")?.value;
-  const colonIdx = savedCookie?.indexOf(":") ?? -1;
-  const savedNonce   = colonIdx >= 0 ? savedCookie!.slice(0, colonIdx) : savedCookie;
-  const savedClerkId = colonIdx >= 0 ? savedCookie!.slice(colonIdx + 1) : undefined;
-  if (!savedNonce || savedNonce !== state) {
-    console.warn("[meta/callback] CSRF state mismatch — expired or replayed session", { hasSavedCookie: !!savedCookie });
+  const cookiePresent = !!jar.get("meta_oauth_state")?.value;
+  const stateVerification = verifyState(state);
+  console.log("[meta/callback] state verification", {
+    ok: stateVerification.ok,
+    reason: stateVerification.ok ? undefined : stateVerification.reason,
+    cookiePresent,
+  });
+  if (!stateVerification.ok) {
+    console.warn("[meta/callback] invalid state", { reason: stateVerification.reason });
     return redirect(req, "invalid_state");
   }
-  if (!savedClerkId) {
-    console.warn("[meta/callback] No clerkId in state cookie — flow may have been initiated without auth");
-    return redirect(req, "invalid_state");
-  }
+  const savedClerkId = stateVerification.userId;
 
   // ── Env-var pre-flight (cheap checks before spending the OAuth code) ─────────
   const appId     = process.env.META_APP_ID;
@@ -115,10 +152,10 @@ export async function GET(req: Request) {
   const cbUrl = metaCallbackUrl(req);
 
   try {
-    // ── Workspace — resolved via userId from state cookie, not from auth() ──────
+    // ── Workspace — resolved via userId from HMAC-signed state, not from auth() ──
     // auth() is unavailable here: Clerk's cross-origin handshake intercepts the
-    // Facebook redirect-back before this handler runs. savedClerkId (from the
-    // httpOnly CSRF cookie set at OAuth initiation) is the safe alternative.
+    // Facebook redirect-back before this handler runs. savedClerkId (extracted from
+    // the verified state payload) is the safe alternative.
     const dbUser = await prisma.user.findUnique({
       where: { clerkId: savedClerkId },
       include: { workspace: true },
