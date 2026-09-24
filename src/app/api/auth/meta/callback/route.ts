@@ -262,9 +262,15 @@ export async function GET(req: Request) {
       });
     }
 
-    console.log("[meta/callback] OAuth complete — redirecting to page selection");
-    const dest = new URL("/app/pages", req.url);
-    dest.searchParams.set("flow", "select");
+    console.log("[meta/callback] OAuth complete — redirecting via relay to page selection");
+    // Redirect via /auth/relay instead of directly to /app/pages.
+    // The Facebook redirect gives the browser Referer: www.facebook.com, which
+    // triggers Clerk's shouldForceHandshakeForCrossDomain on any subsequent
+    // same-host navigation.  The relay page (excluded from Clerk middleware)
+    // uses window.location.replace() so the /app/pages request carries a
+    // same-origin Referer, allowing Clerk to validate the session normally.
+    const dest = new URL("/auth/relay", req.url);
+    dest.searchParams.set("to", "/app/pages?flow=select");
     const res = NextResponse.redirect(dest.toString());
     res.cookies.delete("meta_oauth_state");
     return res;

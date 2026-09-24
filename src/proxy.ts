@@ -29,6 +29,6 @@ export const config = {
     // before the route handler runs, permanently breaking the OAuth code exchange.
     // The callback validates identity through a signed state cookie (set at initiation)
     // instead of Clerk's auth(), so it does not need the Clerk middleware.
-    "/((?!_next/static|_next/image|favicon\\.svg|.*\\.png$|api/auth/meta/callback).*)",
+    "/((?!_next/static|_next/image|favicon\\.svg|.*\\.png$|api/auth/meta/callback|auth/relay).*)",
   ],
 };
