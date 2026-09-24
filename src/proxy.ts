@@ -1,25 +1,7 @@
 import { clerkMiddleware } from "@clerk/nextjs/server";
 
 // Auth protection is handled in src/app/app/layout.tsx via auth.protect()
-// Diagnostic handler logs auth state for /app/pages requests to trace the
-// Facebook OAuth → Clerk session recognition failure.
-// TODO: remove after Facebook Connect flow is confirmed working.
-export const proxy = clerkMiddleware(async (auth, req) => {
-  if (new URL(req.url).pathname.startsWith("/app/pages")) {
-    const a = await auth();
-    const referer = req.headers.get("referer") ?? "none";
-    const secFetchDest = req.headers.get("sec-fetch-dest") ?? "none";
-    const refererHost = (() => {
-      try { return new URL(referer).hostname; } catch { return referer; }
-    })();
-    console.log("[proxy] /app/pages auth diagnostic", {
-      hasUserId: !!(a as { userId?: string | null }).userId,
-      sessionStatus: (a as { sessionStatus?: string | null }).sessionStatus ?? "unknown",
-      refererHost,
-      secFetchDest,
-    });
-  }
-});
+export const proxy = clerkMiddleware();
 
 export const config = {
   matcher: [

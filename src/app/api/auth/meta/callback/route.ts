@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { createHmac, timingSafeEqual } from "crypto";
 import { prisma } from "@/lib/db";
 import { encryptToken } from "@/lib/token-crypto";
@@ -109,7 +108,6 @@ async function fetchJson<T>(url: string): Promise<FetchResult<T>> {
 // ── Route handler ─────────────────────────────────────────────────────────────
 
 export async function GET(req: Request) {
-  console.log("[meta/callback] ENTRY", { url: req.url.split("?")[0], hasCode: !!new URL(req.url).searchParams.get("code"), hasState: !!new URL(req.url).searchParams.get("state") });
   const url    = new URL(req.url);
   const code   = url.searchParams.get("code");
   const state  = url.searchParams.get("state");
@@ -130,14 +128,7 @@ export async function GET(req: Request) {
   // The HMAC-signed state is the primary check.  The cookie is no longer required
   // because the callback is pinned to www.messaivo.com while initiation can come
   // from any host; cookies set on the initiating host are not sent to the callback.
-  const jar = await cookies();
-  const cookiePresent = !!jar.get("meta_oauth_state")?.value;
   const stateVerification = verifyState(state);
-  console.log("[meta/callback] state verification", {
-    ok: stateVerification.ok,
-    reason: stateVerification.ok ? undefined : stateVerification.reason,
-    cookiePresent,
-  });
   if (!stateVerification.ok) {
     console.warn("[meta/callback] invalid state", { reason: stateVerification.reason });
     return redirect(req, "invalid_state");
@@ -153,13 +144,6 @@ export async function GET(req: Request) {
   }
 
   const encKeyLen = (process.env.META_TOKEN_ENCRYPTION_KEY ?? "").length;
-  const envLabel  = process.env.NODE_ENV;
-  console.log("[meta/callback] pre-flight OK", {
-    env: envLabel,
-    callbackHost: new URL(metaCallbackUrl(req)).host,
-    encryptionKeyLen: encKeyLen,
-    encryptionKeyValid: encKeyLen >= 64,
-  });
 
   if (process.env.NODE_ENV === "production" && encKeyLen < 64) {
     console.error(

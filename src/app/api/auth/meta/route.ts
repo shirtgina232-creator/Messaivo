@@ -29,10 +29,8 @@ function signState(nonce: string, userId: string, originHost: string): string {
 }
 
 export async function GET(req: Request) {
-  console.log("[meta/oauth] ENTRY", { url: req.url, referer: (req as Request & { headers: Headers }).headers?.get?.("referer") ?? "none" });
   const authResult = await auth();
   const { userId } = authResult;
-  console.log("[meta/oauth] auth()", { hasUserId: !!userId });
   if (!userId) {
     console.warn("[meta/oauth] no userId — redirecting to /login");
     return NextResponse.redirect(new URL("/login", req.url));
@@ -56,15 +54,6 @@ export async function GET(req: Request) {
   const signedState = signState(stateNonce, userId, reqHost);
 
   const useConfigId = !!(configId && process.env.NODE_ENV === "production");
-  console.log("[meta/oauth] initiating OAuth", {
-    env: process.env.NODE_ENV,
-    reqHost,
-    callbackHost: new URL(cbUrl).host,
-    hasConfigId: !!configId,
-    usingConfigId: useConfigId,
-    redirectUri: cbUrl,
-    stateFormat: "hmac-signed",
-  });
 
   const oauthUrl = new URL("https://www.facebook.com/v19.0/dialog/oauth");
   oauthUrl.searchParams.set("client_id", appId);

@@ -6,7 +6,6 @@ import { WorkspaceProvider } from "@/lib/workspace-context";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const authState = await auth();
-  console.log("[AppLayout] auth state", { hasUserId: !!authState.userId, sessionStatus: authState.sessionStatus ?? "unknown" });
   await auth.protect();
 
   // Get-or-create the user's DB record + workspace without requiring the Clerk webhook.
