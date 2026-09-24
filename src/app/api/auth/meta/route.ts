@@ -17,8 +17,11 @@ import { metaCallbackUrl } from "@/lib/meta-oauth";
  *
  * The cookie is still set (defense-in-depth) but is no longer the primary check.
  */
-function signState(nonce: string, userId: string): string {
-  const payload = Buffer.from(JSON.stringify({ u: userId, t: Date.now() })).toString("base64url");
+// h = origin host (the Messaivo host that initiated the OAuth flow).
+// Stored so the callback can redirect back to the same host, where the
+// Clerk session lives.  HMAC-protected — cannot be tampered without the key.
+function signState(nonce: string, userId: string, originHost: string): string {
+  const payload = Buffer.from(JSON.stringify({ u: userId, t: Date.now(), h: originHost })).toString("base64url");
   const unsigned = `${nonce}.${payload}`;
   const key = Buffer.from(process.env.META_TOKEN_ENCRYPTION_KEY ?? "", "hex");
   const mac = createHmac("sha256", key).update(unsigned).digest("base64url");
@@ -46,14 +49,13 @@ export async function GET(req: Request) {
 
   const cbUrl = metaCallbackUrl(req);
   const stateNonce = randomBytes(16).toString("hex");
-  // HMAC-signed state: nonce + userId + timestamp embedded in the state param itself.
-  // This means the callback can verify identity without a cookie, which fixes the
-  // cross-host failure where the cookie was set on messaivo.vercel.app but the
-  // callback always goes to www.messaivo.com.
-  const signedState = signState(stateNonce, userId);
+  const reqHost = new URL(req.url).host;
+  // Embed the origin host in the signed state so the callback can redirect
+  // back to the same Messaivo host where the Clerk session lives, instead of
+  // always going to www.messaivo.com.
+  const signedState = signState(stateNonce, userId, reqHost);
 
   const useConfigId = !!(configId && process.env.NODE_ENV === "production");
-  const reqHost = new URL(req.url).host;
   console.log("[meta/oauth] initiating OAuth", {
     env: process.env.NODE_ENV,
     reqHost,

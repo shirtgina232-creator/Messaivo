@@ -6,6 +6,17 @@ import { encryptToken } from "@/lib/token-crypto";
 import { metaCallbackUrl } from "@/lib/meta-oauth";
 
 /**
+ * Trusted Messaivo hosts that may appear as the OAuth origin.
+ * MUST be kept in sync with the actual production and preview hostnames.
+ * Any host not in this set is rejected — the relay redirect falls back to
+ * www.messaivo.com so we can never be used as an open redirector.
+ */
+const ALLOWED_ORIGIN_HOSTS = new Set([
+  "www.messaivo.com",
+  "messaivo.vercel.app",
+]);
+
+/**
  * Verify an HMAC-signed state token produced by signState() in /api/auth/meta.
  *
  * Format: `{nonce}.{base64url(payload)}.{base64url(HMAC-SHA256)}`
@@ -14,8 +25,11 @@ import { metaCallbackUrl } from "@/lib/meta-oauth";
  * callback is pinned to www.messaivo.com via APP_URL while OAuth can be
  * initiated from any host (e.g. messaivo.vercel.app).  Cookies scoped to the
  * initiating host are never sent to a different domain in the callback.
+ *
+ * The payload now carries `h` (origin host) so the callback can redirect back
+ * to the initiating host's /auth/relay, where the Clerk session lives.
  */
-function verifyState(state: string): { ok: true; userId: string; nonce: string } | { ok: false; reason: string } {
+function verifyState(state: string): { ok: true; userId: string; nonce: string; originHost: string } | { ok: false; reason: string } {
   const parts = state.split(".");
   if (parts.length !== 3) return { ok: false, reason: "bad_format" };
   const [nonce, payloadB64, mac] = parts;
@@ -32,7 +46,7 @@ function verifyState(state: string): { ok: true; userId: string; nonce: string }
   } catch {
     return { ok: false, reason: "mac_parse_error" };
   }
-  let payload: { u: string; t: number };
+  let payload: { u: string; t: number; h?: string };
   try {
     payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8"));
   } catch {
@@ -40,7 +54,13 @@ function verifyState(state: string): { ok: true; userId: string; nonce: string }
   }
   if (!payload.u || typeof payload.t !== "number") return { ok: false, reason: "bad_payload_fields" };
   if (Date.now() - payload.t > 600_000) return { ok: false, reason: "state_expired" };
-  return { ok: true, userId: payload.u, nonce };
+  // `h` is required from this deploy onward.  Old tokens (< 10 min old) that
+  // lack it fall back to www.messaivo.com — safe because they will be gone
+  // within one token TTL of the deploy.
+  const originHost = typeof payload.h === "string" && payload.h.length > 0
+    ? payload.h
+    : "www.messaivo.com";
+  return { ok: true, userId: payload.u, nonce, originHost };
 }
 
 const GRAPH = "https://graph.facebook.com/v19.0";
@@ -262,14 +282,18 @@ export async function GET(req: Request) {
       });
     }
 
-    console.log("[meta/callback] OAuth complete — redirecting via relay to page selection");
-    // Redirect via /auth/relay instead of directly to /app/pages.
-    // The Facebook redirect gives the browser Referer: www.facebook.com, which
-    // triggers Clerk's shouldForceHandshakeForCrossDomain on any subsequent
-    // same-host navigation.  The relay page (excluded from Clerk middleware)
-    // uses window.location.replace() so the /app/pages request carries a
-    // same-origin Referer, allowing Clerk to validate the session normally.
-    const dest = new URL("/auth/relay", req.url);
+    // Relay redirect: send the browser back to the HOST that initiated the
+    // OAuth flow (stored in the signed state as `h`).  That host is where
+    // the Clerk __session cookie lives.  Validate against the allowlist so we
+    // can never be used as an open redirector.
+    const relayHost = ALLOWED_ORIGIN_HOSTS.has(stateVerification.originHost)
+      ? stateVerification.originHost
+      : "www.messaivo.com"; // safe fallback for any unknown host
+    console.log("[meta/callback] OAuth complete — redirecting via relay to page selection", {
+      relayHost,
+      originHost: stateVerification.originHost,
+    });
+    const dest = new URL(`https://${relayHost}/auth/relay`);
     dest.searchParams.set("to", "/app/pages?flow=select");
     const res = NextResponse.redirect(dest.toString());
     res.cookies.delete("meta_oauth_state");
