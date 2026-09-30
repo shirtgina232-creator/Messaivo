@@ -6,14 +6,29 @@ import { metaCallbackUrl } from "@/lib/meta-oauth";
 
 /**
  * Trusted Messaivo hosts that may appear as the OAuth origin.
- * MUST be kept in sync with the actual production and preview hostnames.
- * Any host not in this set is rejected — the relay redirect falls back to
- * www.messaivo.com so we can never be used as an open redirector.
+ *
+ * Static allowlist covers production and the root Vercel alias.
+ * The pattern check covers branch/deployment previews issued by Vercel
+ * for this project (e.g. messaivo-git-feat-foo-messaivo.vercel.app).
+ * ALLOWED_EXTRA_HOSTS (comma-separated, Preview env var) is an escape hatch
+ * for any host that doesn't match the pattern.
+ *
+ * Any host that fails all checks falls back to www.messaivo.com so we can
+ * never be used as an open redirector.
  */
 const ALLOWED_ORIGIN_HOSTS = new Set([
   "www.messaivo.com",
   "messaivo.vercel.app",
+  // Parse the escape-hatch env var once at module load time.
+  ...(process.env.ALLOWED_EXTRA_HOSTS ?? "").split(",").map(h => h.trim()).filter(Boolean),
 ]);
+
+// Vercel preview pattern for this project: <anything>-messaivo.vercel.app
+const VERCEL_PREVIEW_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?-messaivo\.vercel\.app$/;
+
+function isAllowedHost(host: string): boolean {
+  return ALLOWED_ORIGIN_HOSTS.has(host) || VERCEL_PREVIEW_RE.test(host);
+}
 
 /**
  * Verify an HMAC-signed state token produced by signState() in /api/auth/meta.
@@ -270,7 +285,7 @@ export async function GET(req: Request) {
     // OAuth flow (stored in the signed state as `h`).  That host is where
     // the Clerk __session cookie lives.  Validate against the allowlist so we
     // can never be used as an open redirector.
-    const relayHost = ALLOWED_ORIGIN_HOSTS.has(stateVerification.originHost)
+    const relayHost = isAllowedHost(stateVerification.originHost)
       ? stateVerification.originHost
       : "www.messaivo.com"; // safe fallback for any unknown host
     console.log("[meta/callback] OAuth complete — redirecting via relay to page selection", {
