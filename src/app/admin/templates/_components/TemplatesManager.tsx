@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { Plus, Edit2, Trash2, X, ChevronDown, ChevronUp, Files, Check, AlertTriangle, Eye } from "lucide-react";
+import { useState, useMemo, useEffect } from "react";
+import { Plus, Edit2, Trash2, X, ChevronDown, ChevronUp, Files, Check, AlertTriangle, Eye, Zap, Loader2 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -31,7 +31,13 @@ type GlobalTemplate = {
   createdBy: string | null;
   createdAt: Date;
   updatedAt: Date;
+  isUtility?: boolean;
+  metaTemplateName?: string | null;
+  metaTemplateStatus?: string | null;
+  registeredForPageId?: string | null;
 };
+
+interface PageOption { id: string; pageName: string; }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -305,6 +311,115 @@ function TemplateForm({ initial, onSave, onCancel, saving }: {
   );
 }
 
+// ── Register with Meta Modal ──────────────────────────────────────────────────
+
+function RegisterMetaModal({ template, onCancel, onSuccess }: {
+  template: GlobalTemplate;
+  onCancel: () => void;
+  onSuccess: (updated: GlobalTemplate) => void;
+}) {
+  const [pages, setPages] = useState<PageOption[]>([]);
+  const [loadingPages, setLoadingPages] = useState(true);
+  const [selectedPageId, setSelectedPageId] = useState("");
+  const [registering, setRegistering] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/pages?activeOnly=true")
+      .then(r => r.json())
+      .then((d: { pages?: PageOption[] }) => {
+        setPages(d.pages ?? []);
+        if (d.pages?.length) setSelectedPageId(d.pages[0].id);
+      })
+      .catch(() => setError("Failed to load pages"))
+      .finally(() => setLoadingPages(false));
+  }, []);
+
+  async function handleRegister() {
+    if (!selectedPageId) return;
+    setRegistering(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/templates/${template.id}/register-meta`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pageId: selectedPageId }),
+      });
+      const data = await res.json() as { template?: GlobalTemplate; error?: string };
+      if (!res.ok) { setError(data.error ?? "Registration failed"); return; }
+      onSuccess(data.template!);
+    } catch { setError("Network error — please try again"); }
+    finally { setRegistering(false); }
+  }
+
+  const inp = "w-full px-3 py-2 rounded-lg text-[13px] outline-none";
+  const inpStyle = { background: "#101722", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onCancel} />
+      <div className="relative w-full max-w-md rounded-2xl p-6 flex flex-col gap-4"
+        style={{ background: "#0A111B", border: "1px solid rgba(108,99,255,0.3)" }}
+        onClick={e => e.stopPropagation()}>
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: "rgba(108,99,255,0.12)" }}>
+            <Zap size={18} style={{ color: "#8B85FF" }} />
+          </div>
+          <div>
+            <div className="text-[14px] font-semibold" style={{ color: "#F5F7FA" }}>Register Utility Template</div>
+            <div className="text-[11.5px] mt-0.5 truncate max-w-[260px]" style={{ color: "#8B95A7" }}>{template.name}</div>
+          </div>
+        </div>
+        <p className="text-[12px] leading-relaxed" style={{ color: "#8B95A7" }}>
+          This submits the template to Meta&apos;s <code className="px-1 rounded" style={{ background: "rgba(108,99,255,0.15)", color: "#8B85FF" }}>/message_templates</code> API
+          with <code className="px-1 rounded" style={{ background: "rgba(108,99,255,0.15)", color: "#8B85FF" }}>category: &quot;UTILITY&quot;</code>.
+          Meta typically auto-approves utility templates within seconds.
+        </p>
+        {template.metaTemplateStatus === "APPROVED" && (
+          <div className="flex items-center gap-2 p-2.5 rounded-lg text-[11.5px]"
+            style={{ background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.2)", color: "#10B981" }}>
+            <Check size={12} className="shrink-0" />
+            Already approved as <strong>{template.metaTemplateName}</strong>. Re-registering will create a new template name.
+          </div>
+        )}
+        <div>
+          <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: "#8B95A7" }}>
+            Register for Page
+          </label>
+          {loadingPages
+            ? <div className="flex items-center gap-2 py-2 text-[12px]" style={{ color: "#8B95A7" }}><Loader2 size={12} className="animate-spin" /> Loading pages…</div>
+            : pages.length === 0
+            ? <p className="text-[12px]" style={{ color: "#EF4444" }}>No active pages found. Connect a Facebook Page first.</p>
+            : <select className={inp} style={inpStyle} value={selectedPageId} onChange={e => setSelectedPageId(e.target.value)}>
+                {pages.map(p => <option key={p.id} value={p.id}>{p.pageName}</option>)}
+              </select>
+          }
+        </div>
+        {error && (
+          <div className="flex items-start gap-2 p-2.5 rounded-lg text-[11.5px]"
+            style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", color: "#EF4444" }}>
+            <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+            {error}
+          </div>
+        )}
+        <div className="flex gap-2 justify-end">
+          <button className="text-[13px] font-medium px-4 py-2 rounded-lg"
+            style={{ color: "#8B95A7", background: "rgba(255,255,255,0.04)" }} onClick={onCancel}>
+            Cancel
+          </button>
+          <button
+            className="text-[13px] font-semibold px-4 py-2 rounded-lg text-white flex items-center gap-2 disabled:opacity-40"
+            style={{ background: "#6C63FF" }}
+            disabled={registering || !selectedPageId || loadingPages}
+            onClick={handleRegister}>
+            {registering ? <><Loader2 size={13} className="animate-spin" /> Registering…</> : <><Zap size={13} /> Register with Meta</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Templates Manager ─────────────────────────────────────────────────────────
 
 const STATUS_FILTERS = ["All", "Active", "Draft", "Inactive"] as const;
@@ -320,6 +435,7 @@ export default function TemplatesManager({ initialTemplates }: { initialTemplate
   const [duplicating, setDuplicating] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
   const [catFilter, setCatFilter] = useState("All");
+  const [registerTarget, setRegisterTarget] = useState<GlobalTemplate | null>(null);
 
   const fmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" });
 
@@ -500,6 +616,19 @@ export default function TemplatesManager({ initialTemplates }: { initialTemplate
                 </div>
                 <div className="text-[11.5px]" style={{ color: "#8B95A7" }}>{fmt.format(new Date(t.createdAt))}</div>
                 <div className="flex items-center gap-1">
+                  {/* Meta utility registration */}
+                  {t.metaTemplateStatus === "APPROVED"
+                    ? <span className="h-6 px-2 flex items-center gap-1 rounded-lg text-[10px] font-semibold"
+                        style={{ color: "#10B981", background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)" }}>
+                        <Zap size={9} /> Utility
+                      </span>
+                    : <button title="Register with Meta as utility template"
+                        onClick={() => setRegisterTarget(t)}
+                        className="h-6 px-2 flex items-center gap-1 rounded-lg text-[10px] font-semibold"
+                        style={{ color: "#8B85FF", background: "rgba(108,99,255,0.08)", border: "1px solid rgba(108,99,255,0.2)" }}>
+                        <Zap size={9} /> Register
+                      </button>
+                  }
                   {/* Activate / Deactivate quick toggle */}
                   {tStatus !== "active" && (
                     <button title="Activate"
@@ -565,6 +694,17 @@ export default function TemplatesManager({ initialTemplates }: { initialTemplate
           onCancel={() => setDeleteTarget(null)}
           onConfirm={handleDeleteConfirm}
           deleting={deleting}
+        />
+      )}
+
+      {registerTarget && (
+        <RegisterMetaModal
+          template={registerTarget}
+          onCancel={() => setRegisterTarget(null)}
+          onSuccess={updated => {
+            setTemplates(p => p.map(t => t.id === updated.id ? { ...t, ...updated } : t));
+            setRegisterTarget(null);
+          }}
         />
       )}
     </div>

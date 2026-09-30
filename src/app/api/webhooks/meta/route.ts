@@ -140,10 +140,11 @@ async function handleMessagingEvent(event: MetaMessagingEvent): Promise<void> {
     // Upsert contact
     const contact = await prisma.contact.upsert({
       where: {
-        workspaceId_metaUserId: { workspaceId: page.workspaceId, metaUserId: sender.id },
+        workspaceId_pageId_metaUserId: { workspaceId: page.workspaceId, pageId: page.id, metaUserId: sender.id },
       },
       update: {
         lastMessageAt: new Date(timestamp),
+        relationshipVerifiedAt: new Date(timestamp),
         totalMessages: { increment: 1 },
         isSubscribed: true, // any inbound message re-subscribes the contact
       },
@@ -152,6 +153,7 @@ async function handleMessagingEvent(event: MetaMessagingEvent): Promise<void> {
         pageId:       page.id,
         metaUserId:   sender.id,
         lastMessageAt: new Date(timestamp),
+        relationshipVerifiedAt: new Date(timestamp),
         totalMessages: 1,
         isSubscribed: true,
       },

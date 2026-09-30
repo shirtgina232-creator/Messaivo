@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft, CheckCircle2, Clock, AlertCircle, X, Loader2,
   Send, Calendar, MessageSquare, Users, StopCircle, FileText,
-  TrendingUp, Eye, CornerDownRight, Ban,
+  TrendingUp, Eye, CornerDownRight, Ban, Search,
 } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -33,6 +33,17 @@ interface BroadcastDetail {
   creditsUsed: number;
   messagingTag: string | null;
   allowSubscriberSend: boolean;
+  messagingType: string | null;
+  metaTemplateName: string | null;
+}
+
+interface Contact {
+  id: string;
+  name: string | null;
+  firstName: string | null;
+  metaUserId: string;
+  lastMessageAt: string | null;
+  isSubscribed: boolean;
 }
 
 interface ProgressData {
@@ -223,6 +234,14 @@ export default function BroadcastDetailPage() {
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState("");
 
+  // Test send state
+  const [testContacts, setTestContacts] = useState<Contact[]>([]);
+  const [testContactsLoading, setTestContactsLoading] = useState(false);
+  const [testSearch, setTestSearch] = useState("");
+  const [testSelectedId, setTestSelectedId] = useState<string | null>(null);
+  const [testSending, setTestSending] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+
   // Fetch full broadcast details
   const fetchDetail = useCallback(async () => {
     try {
@@ -251,6 +270,42 @@ export default function BroadcastDetailPage() {
     fetchDetail();
     fetchProgress();
   }, [fetchDetail, fetchProgress]);
+
+  // Load contacts for test-send when broadcast is in draft/scheduled
+  useEffect(() => {
+    if (!broadcast?.pageId) return;
+    if (broadcast.status !== "draft" && broadcast.status !== "scheduled") return;
+    setTestContactsLoading(true);
+    const qs = testSearch ? `&search=${encodeURIComponent(testSearch)}` : "";
+    fetch(`/api/contacts?pageId=${broadcast.pageId}&limit=25${qs}`)
+      .then(r => r.ok ? r.json() : null)
+      .then((d: { contacts?: Contact[] } | null) => { if (d?.contacts) setTestContacts(d.contacts); })
+      .catch(() => {})
+      .finally(() => setTestContactsLoading(false));
+  }, [broadcast?.pageId, broadcast?.status, testSearch]);
+
+  const handleTestSend = useCallback(async () => {
+    if (!testSelectedId || !broadcast) return;
+    setTestSending(true); setTestResult(null);
+    try {
+      const res = await fetch(`/api/broadcasts/${broadcast.id}/test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contactIds: [testSelectedId] }),
+      });
+      const d = await res.json() as { results?: Array<{ success: boolean; error: string | null }>; error?: string };
+      if (res.ok && d.results?.[0]) {
+        const r = d.results[0];
+        setTestResult({ success: r.success, message: r.success ? "Delivered — check Messenger on the recipient's device." : (r.error ?? "Send failed.") });
+      } else {
+        setTestResult({ success: false, message: d.error ?? "Test send failed." });
+      }
+    } catch {
+      setTestResult({ success: false, message: "Network error. Please try again." });
+    } finally {
+      setTestSending(false);
+    }
+  }, [testSelectedId, broadcast]);
 
   // Auto-refresh progress while sending
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -494,6 +549,95 @@ export default function BroadcastDetailPage() {
             </div>
             <Timeline b={broadcast} />
           </div>
+
+          {/* Test Send */}
+          {(status === "draft" || status === "scheduled") && broadcast.pageId && (
+            <div className="rounded-xl p-4" style={CARD}>
+              <div className="flex items-center gap-2 mb-2">
+                <Send size={13} style={{ color: "#8B85FF" }} />
+                <p className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "#8B95A7" }}>Test Send</p>
+              </div>
+              <p className="text-[11.5px] mb-3 leading-relaxed" style={{ color: "#8B95A7" }}>
+                Send to one contact to verify the message renders correctly before the full broadcast.
+              </p>
+              {broadcast.messagingType === "UTILITY" && (
+                <div className="flex items-start gap-2 p-2.5 rounded-lg mb-3 text-[11px]"
+                  style={{ background: "rgba(108,99,255,0.06)", border: "1px solid rgba(108,99,255,0.2)", color: "#A89DFF" }}>
+                  <AlertCircle size={11} className="mt-0.5 shrink-0" />
+                  <span>Utility messages work outside the 24-hour window. During App Review, the test recipient must be an <strong>Admin, Developer, or Tester</strong> of your Meta app.</span>
+                </div>
+              )}
+              {/* Search */}
+              <div className="relative mb-2">
+                <Search size={11} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: "#8B95A7" }} />
+                <input
+                  value={testSearch}
+                  onChange={e => { setTestSearch(e.target.value); setTestSelectedId(null); setTestResult(null); }}
+                  placeholder="Search contacts…"
+                  className="w-full pl-7 pr-3 py-2 rounded-lg text-[12px] outline-none"
+                  style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" }}
+                />
+              </div>
+              {/* Contact list */}
+              <div className="flex flex-col gap-1 max-h-44 overflow-y-auto mb-3 pr-0.5">
+                {testContactsLoading
+                  ? <div className="flex items-center gap-2 py-3 justify-center text-[11px]" style={{ color: "#8B95A7" }}><Loader2 size={11} className="animate-spin" /> Loading…</div>
+                  : testContacts.length === 0
+                  ? <p className="py-3 text-center text-[11.5px]" style={{ color: "#8B95A7" }}>No contacts found for this page.</p>
+                  : testContacts.map(c => {
+                      const displayName = c.name ?? c.firstName ?? c.metaUserId;
+                      const isUtilityBroadcast = broadcast.messagingType === "UTILITY";
+                      const windowOpen = !!c.lastMessageAt && (Date.now() - new Date(c.lastMessageAt).getTime()) < 86_400_000;
+                      const neverMessaged = !c.lastMessageAt;
+                      const dotColor = isUtilityBroadcast ? "#10B981" : neverMessaged ? "#8B95A7" : windowOpen ? "#10B981" : "#F59E0B";
+                      const windowLabel = isUtilityBroadcast ? "utility" : neverMessaged ? "no msgs" : windowOpen ? "in window" : "out of window";
+                      return (
+                        <button key={c.id}
+                          onClick={() => { setTestSelectedId(prev => prev === c.id ? null : c.id); setTestResult(null); }}
+                          className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-left"
+                          style={{
+                            background: testSelectedId === c.id ? "rgba(108,99,255,0.12)" : "rgba(255,255,255,0.02)",
+                            border: `1px solid ${testSelectedId === c.id ? "rgba(108,99,255,0.35)" : "rgba(255,255,255,0.05)"}`,
+                          }}>
+                          <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: dotColor }} />
+                          <span className="text-[12px] truncate flex-1" style={{ color: "#C4CDD8" }}>{displayName}</span>
+                          <span className="text-[10px] shrink-0" style={{ color: dotColor }}>{windowLabel}</span>
+                        </button>
+                      );
+                    })}
+              </div>
+              {/* Result */}
+              {testResult && (
+                <div className="flex items-start gap-2 p-2.5 rounded-lg mb-3 text-[11.5px]"
+                  style={{
+                    background: testResult.success ? "rgba(16,185,129,0.06)" : "rgba(239,68,68,0.06)",
+                    border: `1px solid ${testResult.success ? "rgba(16,185,129,0.2)" : "rgba(239,68,68,0.2)"}`,
+                    color: testResult.success ? "#10B981" : "#EF4444",
+                  }}>
+                  {testResult.success
+                    ? <CheckCircle2 size={12} className="mt-0.5 shrink-0" />
+                    : <AlertCircle size={12} className="mt-0.5 shrink-0" />}
+                  {testResult.message}
+                </div>
+              )}
+              {/* Button */}
+              <button
+                onClick={handleTestSend}
+                disabled={!testSelectedId || testSending}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold"
+                style={{
+                  background: testSelectedId && !testSending ? "rgba(108,99,255,0.15)" : "rgba(255,255,255,0.04)",
+                  border: `1px solid ${testSelectedId && !testSending ? "rgba(108,99,255,0.35)" : "rgba(255,255,255,0.07)"}`,
+                  color: testSelectedId && !testSending ? "#8B85FF" : "#8B95A7",
+                  opacity: testSelectedId && !testSending ? 1 : 0.6,
+                  cursor: testSelectedId && !testSending ? "pointer" : "not-allowed",
+                }}>
+                {testSending
+                  ? <><Loader2 size={13} className="animate-spin" /> Sending…</>
+                  : <><Send size={13} /> Send Test Message</>}
+              </button>
+            </div>
+          )}
 
           {/* Cancel action (also in right column while sending) */}
           {status === "sending" && (

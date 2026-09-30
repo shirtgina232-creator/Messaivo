@@ -62,7 +62,7 @@ function verifyState(state: string): { ok: true; userId: string; nonce: string; 
   return { ok: true, userId: payload.u, nonce, originHost };
 }
 
-const GRAPH = "https://graph.facebook.com/v19.0";
+const GRAPH = "https://graph.facebook.com/v26.0";
 
 type TokenResp    = { access_token?: string; error?: { message: string; code?: number } };
 type FBPage       = { id: string; name: string; category?: string; access_token: string; picture?: { data?: { url?: string } } };
@@ -165,7 +165,7 @@ export async function GET(req: Request) {
       include: { workspace: true },
     });
     const ws = dbUser?.workspace ?? null;
-    if (!ws) {
+    if (!ws || dbUser?.status !== "ACTIVE") {
       console.warn("[meta/callback] No workspace found for clerkId from state cookie", { clerkId: savedClerkId });
       const res = NextResponse.redirect(new URL("/app/pages?error=session_expired", req.url));
       res.cookies.delete("meta_oauth_state");
@@ -249,8 +249,8 @@ export async function GET(req: Request) {
           accessToken:       encryptedToken,
           pageCategory:      p.category ?? null,
           pageAvatar:        p.picture?.data?.url ?? null,
-          isActive:          false,
-          webhookSubscribed: false,
+          utilityPermissionGranted: false,
+          permissionsCheckedAt: null,
           lastSyncedAt:      new Date(),
         },
         create: {

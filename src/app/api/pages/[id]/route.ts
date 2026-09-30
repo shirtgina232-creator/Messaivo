@@ -1,3 +1,4 @@
+import { verifyPageGrant } from "@/lib/utility-registration";
 import { prisma } from "@/lib/db";
 import {
   getWorkspace, unauthorized, notFound, badRequest, serverError, ok, noContent,
@@ -101,6 +102,10 @@ export async function PATCH(
       }
     }
 
+    if (isActive === true) {
+      const full = await prisma.facebookPage.findUniqueOrThrow({ where: { id } });
+      try { await verifyPageGrant(full); } catch { /* Saved permissionError is returned to the user; standard inbox remains usable. */ }
+    }
     // Return page without accessToken
     const { accessToken: _omit, ...pageForClient } = updated;
     return ok({ page: pageForClient });
@@ -125,7 +130,7 @@ export async function DELETE(
     });
     if (!existing) return notFound("Page not found");
 
-    await prisma.facebookPage.delete({ where: { id } });
+    await prisma.facebookPage.update({ where: { id }, data: { isActive: false, utilityPermissionGranted: false } });
     return noContent();
   } catch (e) {
     console.error("[DELETE /api/pages/[id]]", e);
