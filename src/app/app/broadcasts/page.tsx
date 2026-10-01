@@ -5,9 +5,10 @@ import { useRouter } from "next/navigation";
 import {
   Plus, Search, Send, Loader2, ChevronDown, ChevronRight,
   CheckCircle2, Clock, AlertCircle, X, RefreshCw, Users, FileText,
-  Calendar, MessageSquare, StopCircle, ExternalLink,
+  Calendar, MessageSquare, StopCircle, ExternalLink, Zap,
 } from "lucide-react";
 import { useWorkspace } from "@/lib/workspace-context";
+import BulkTextWizard from "@/components/app/BulkTextWizard";
 
 // â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -1105,6 +1106,7 @@ export default function BroadcastsPage() {
   const [loading, setLoading] = useState(true);
   const [pageMap, setPageMap] = useState<Record<string, string>>({});
   const [showNew, setShowNew] = useState(false);
+  const [showBulk, setShowBulk] = useState(false);
 
   // Cancel flow
   const [cancelTarget, setCancelTarget] = useState<BroadcastItem | null>(null);
@@ -1182,6 +1184,11 @@ export default function BroadcastsPage() {
               <Loader2 size={11} className="animate-spin" /> {sending} sending
             </span>
           )}
+          <button onClick={() => setShowBulk(true)}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-[13px] font-semibold text-white"
+            style={{ background: "rgba(108,99,255,0.15)", border: "1px solid rgba(108,99,255,0.35)", color: "#A89DFF" }}>
+            <Zap size={14} /> Bulk Text
+          </button>
           <button onClick={() => setShowNew(true)}
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-[13px] font-semibold text-white"
             style={{ background: "#6C63FF" }}>
@@ -1215,6 +1222,15 @@ export default function BroadcastsPage() {
         onCancel={b => { setCancelTarget(b); setCancelError(""); }}
         onViewDetails={b => router.push(`/app/broadcasts/${b.id}`)}
       />
+
+      {/* Bulk Text Wizard */}
+      {showBulk && (
+        <BulkTextWizard
+          pages={pages}
+          onClose={() => setShowBulk(false)}
+          onSent={() => { fetchBroadcasts(); }}
+        />
+      )}
 
       {/* New Broadcast Slide Panel */}
       {showNew && (
