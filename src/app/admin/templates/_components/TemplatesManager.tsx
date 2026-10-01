@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useEffect } from "react";
-import { Plus, Edit2, Trash2, X, ChevronDown, ChevronUp, Files, Check, AlertTriangle, Eye, Zap, Loader2 } from "lucide-react";
+import { Plus, Edit2, Trash2, X, ChevronDown, ChevronUp, Files, Check, AlertTriangle, Eye, Zap, Loader2, RefreshCw } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -35,9 +35,20 @@ type GlobalTemplate = {
   metaTemplateName?: string | null;
   metaTemplateStatus?: string | null;
   registeredForPageId?: string | null;
+  utilityRegistrations?: RegistrationInfo[];
 };
 
 interface PageOption { id: string; pageName: string; }
+
+interface RegistrationInfo {
+  id: string;
+  pageId: string;
+  status: string;
+  metaTemplateName: string;
+  metaTemplateId: string | null;
+  lastCheckedAt: string | null;
+  lastError: string | null;
+}
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -60,7 +71,7 @@ const STATUS_META: Record<TemplateStatus, { label: string; color: string; bg: st
 
 const EMPTY_FORM = {
   name: "", description: "", content: "", fields: [] as TemplateField[],
-  category: ADMIN_CATEGORIES[0], status: "draft" as TemplateStatus,
+  category: ADMIN_CATEGORIES[0], status: "draft" as TemplateStatus, isUtility: false,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -260,6 +271,18 @@ function TemplateForm({ initial, onSave, onCancel, saving }: {
               : "Deactivated. Hidden from customers."}
           </p>
         </div>
+        <div className="flex flex-col gap-1.5">
+          <label className="block text-[11px] font-semibold uppercase tracking-wider" style={{ color: "#8B95A7" }}>Utility Messaging</label>
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input type="checkbox" checked={form.isUtility ?? false} onChange={e => set("isUtility", e.target.checked)} className="mt-0.5" />
+            <span className="text-[12px]" style={{ color: "#F5F7FA" }}>
+              Mark as utility template
+              <span className="block text-[10.5px] mt-0.5" style={{ color: "#8B95A7" }}>
+                Utility templates can be sent outside the 24-hour messaging window after Meta approval.
+              </span>
+            </span>
+          </label>
+        </div>
       </div>
 
       <FieldBuilder fields={form.fields} onChange={f => set("fields", f)} />
@@ -316,7 +339,7 @@ function TemplateForm({ initial, onSave, onCancel, saving }: {
 function RegisterMetaModal({ template, onCancel, onSuccess }: {
   template: GlobalTemplate;
   onCancel: () => void;
-  onSuccess: (updated: GlobalTemplate) => void;
+  onSuccess: (reg: RegistrationInfo) => void;
 }) {
   const [pages, setPages] = useState<PageOption[]>([]);
   const [loadingPages, setLoadingPages] = useState(true);
@@ -345,9 +368,9 @@ function RegisterMetaModal({ template, onCancel, onSuccess }: {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pageId: selectedPageId }),
       });
-      const data = await res.json() as { template?: GlobalTemplate; error?: string };
+      const data = await res.json() as { registration?: RegistrationInfo; error?: string };
       if (!res.ok) { setError(data.error ?? "Registration failed"); return; }
-      onSuccess(data.template!);
+      onSuccess(data.registration!);
     } catch { setError("Network error — please try again"); }
     finally { setRegistering(false); }
   }
@@ -375,11 +398,11 @@ function RegisterMetaModal({ template, onCancel, onSuccess }: {
           with <code className="px-1 rounded" style={{ background: "rgba(108,99,255,0.15)", color: "#8B85FF" }}>category: &quot;UTILITY&quot;</code>.
           Meta typically auto-approves utility templates within seconds.
         </p>
-        {template.metaTemplateStatus === "APPROVED" && (
+        {template.utilityRegistrations?.some(r => r.status === "APPROVED") && (
           <div className="flex items-center gap-2 p-2.5 rounded-lg text-[11.5px]"
             style={{ background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.2)", color: "#10B981" }}>
             <Check size={12} className="shrink-0" />
-            Already approved as <strong>{template.metaTemplateName}</strong>. Re-registering will create a new template name.
+            Already approved as <strong>{template.utilityRegistrations.find(r => r.status === "APPROVED")?.metaTemplateName}</strong>. Re-registering will create a new template name.
           </div>
         )}
         <div>
@@ -436,6 +459,7 @@ export default function TemplatesManager({ initialTemplates }: { initialTemplate
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
   const [catFilter, setCatFilter] = useState("All");
   const [registerTarget, setRegisterTarget] = useState<GlobalTemplate | null>(null);
+  const [refreshing, setRefreshing] = useState<string | null>(null);
 
   const fmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" });
 
@@ -510,6 +534,25 @@ export default function TemplatesManager({ initialTemplates }: { initialTemplate
       }
     } catch { /* silent */ }
     setDuplicating(null);
+  }
+
+  async function handleRefreshRegistration(templateId: string, reg: RegistrationInfo) {
+    setRefreshing(reg.id);
+    try {
+      const res = await fetch(`/api/admin/templates/${templateId}/refresh-registration`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pageId: reg.pageId, registrationId: reg.id }),
+      });
+      const data = await res.json() as { registration?: RegistrationInfo };
+      if (res.ok && data.registration) {
+        setTemplates(p => p.map(t => t.id === templateId
+          ? { ...t, utilityRegistrations: (t.utilityRegistrations ?? []).map(r => r.id === reg.id ? data.registration! : r) }
+          : t
+        ));
+      }
+    } catch { /* silent */ }
+    setRefreshing(null);
   }
 
   async function handleStatusToggle(t: GlobalTemplate, newStatus: TemplateStatus) {
@@ -616,19 +659,58 @@ export default function TemplatesManager({ initialTemplates }: { initialTemplate
                 </div>
                 <div className="text-[11.5px]" style={{ color: "#8B95A7" }}>{fmt.format(new Date(t.createdAt))}</div>
                 <div className="flex items-center gap-1">
-                  {/* Meta utility registration */}
-                  {t.metaTemplateStatus === "APPROVED"
-                    ? <span className="h-6 px-2 flex items-center gap-1 rounded-lg text-[10px] font-semibold"
-                        style={{ color: "#10B981", background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)" }}>
-                        <Zap size={9} /> Utility
+                  {/* Meta utility registration status */}
+                  {(() => {
+                    const regs = t.utilityRegistrations ?? [];
+                    const approved = regs.find(r => r.status === "APPROVED");
+                    const pending = regs.find(r => ["PENDING", "CREATING"].includes(r.status));
+                    const rejected = regs.find(r => r.status === "REJECTED");
+                    if (approved) return (
+                      <span className="h-6 px-2 flex items-center gap-1 rounded-lg text-[10px] font-semibold"
+                        style={{ color: "#10B981", background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)" }}
+                        title={`Approved as ${approved.metaTemplateName}`}>
+                        <Zap size={9} /> Utility ✓
                       </span>
-                    : <button title="Register with Meta as utility template"
+                    );
+                    if (pending) return (
+                      <>
+                        <span className="h-6 px-2 flex items-center gap-1 rounded-lg text-[10px] font-semibold"
+                          style={{ color: "#F59E0B", background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)" }}>
+                          <Loader2 size={9} className={refreshing === pending.id ? "animate-spin" : ""} /> {pending.status}
+                        </span>
+                        <button title="Refresh Meta approval status"
+                          disabled={refreshing === pending.id}
+                          onClick={() => handleRefreshRegistration(t.id, pending)}
+                          className="h-6 w-6 flex items-center justify-center rounded-lg disabled:opacity-40"
+                          style={{ color: "#8B95A7", background: "rgba(255,255,255,0.04)" }}>
+                          <RefreshCw size={9} />
+                        </button>
+                      </>
+                    );
+                    if (rejected) return (
+                      <>
+                        <span className="h-6 px-2 flex items-center gap-1 rounded-lg text-[10px] font-semibold"
+                          title={rejected.lastError ?? ""}
+                          style={{ color: "#EF4444", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
+                          <Zap size={9} /> Rejected
+                        </span>
+                        <button title="Re-register with Meta"
+                          onClick={() => setRegisterTarget(t)}
+                          className="h-6 px-2 flex items-center gap-1 rounded-lg text-[10px] font-semibold"
+                          style={{ color: "#8B85FF", background: "rgba(108,99,255,0.08)", border: "1px solid rgba(108,99,255,0.2)" }}>
+                          <Zap size={9} /> Retry
+                        </button>
+                      </>
+                    );
+                    return (
+                      <button title="Register with Meta as utility template"
                         onClick={() => setRegisterTarget(t)}
                         className="h-6 px-2 flex items-center gap-1 rounded-lg text-[10px] font-semibold"
                         style={{ color: "#8B85FF", background: "rgba(108,99,255,0.08)", border: "1px solid rgba(108,99,255,0.2)" }}>
                         <Zap size={9} /> Register
                       </button>
-                  }
+                    );
+                  })()}
                   {/* Activate / Deactivate quick toggle */}
                   {tStatus !== "active" && (
                     <button title="Activate"
@@ -676,6 +758,7 @@ export default function TemplatesManager({ initialTemplates }: { initialTemplate
                       fields: (t.fields as TemplateField[] | null) ?? [],
                       category: t.category ?? ADMIN_CATEGORIES[0],
                       status: tStatus,
+                      isUtility: t.isUtility ?? false,
                     }}
                     onSave={form => handleEdit(t.id, form)}
                     onCancel={() => setEditId(null)}
@@ -701,8 +784,12 @@ export default function TemplatesManager({ initialTemplates }: { initialTemplate
         <RegisterMetaModal
           template={registerTarget}
           onCancel={() => setRegisterTarget(null)}
-          onSuccess={updated => {
-            setTemplates(p => p.map(t => t.id === updated.id ? { ...t, ...updated } : t));
+          onSuccess={reg => {
+            const tid = registerTarget.id;
+            setTemplates(p => p.map(t => t.id === tid
+              ? { ...t, utilityRegistrations: [...(t.utilityRegistrations ?? []).filter(r => r.id !== reg.id), reg] }
+              : t
+            ));
             setRegisterTarget(null);
           }}
         />
