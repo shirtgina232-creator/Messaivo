@@ -25,7 +25,24 @@ type MetaMessagingEvent = {
   // Opt-outs can arrive as a keyword message ("STOP") or as an explicit optout event
   optin?: Record<string, unknown>;
 };
-type MetaEntry = { id: string; time: number; messaging: MetaMessagingEvent[] };
+
+type MetaTemplateStatusValue = {
+  message_template_id?: number | string;
+  message_template_name: string;
+  event: string; // "APPROVED" | "REJECTED" | "DISABLED" | "PAUSED"
+};
+
+type MetaChange = {
+  field: string;
+  value: unknown;
+};
+
+type MetaEntry = {
+  id: string;
+  time: number;
+  messaging?: MetaMessagingEvent[];
+  changes?: MetaChange[];
+};
 type MetaWebhookPayload = { object: string; entry: MetaEntry[] };
 
 // ── GET — Meta webhook subscription verification ───────────────────────────────
@@ -98,6 +115,13 @@ export async function POST(req: Request) {
         await handleMessagingEvent(event);
       } catch (err) {
         console.error("[Meta webhook] Unhandled error processing event:", err, "event:", JSON.stringify(event));
+      }
+    }
+    for (const change of entry.changes ?? []) {
+      try {
+        await handleChange(entry.id, change);
+      } catch (err) {
+        console.error("[Meta webhook] Unhandled error processing change:", err, "field:", change.field);
       }
     }
   }
@@ -459,6 +483,61 @@ async function triggerAiAutoReply({
   });
 
   console.log(`[AI auto-reply] sent reply to ${metaUserId}: "${aiReply.slice(0, 60)}…"`);
+}
+
+// ── Template status update ────────────────────────────────────────────────────
+
+async function handleChange(metaPageId: string, change: MetaChange): Promise<void> {
+  if (change.field !== "message_template_status_update") return;
+
+  const value = change.value as MetaTemplateStatusValue;
+  const templateName = value?.message_template_name;
+  const event = value?.event;
+
+  if (!templateName || !event) {
+    console.warn("[Meta webhook] template_status_update: missing name or event in payload");
+    return;
+  }
+
+  const ALLOWED_STATUSES = new Set(["APPROVED", "REJECTED", "DISABLED", "PAUSED"]);
+  const status = event.toUpperCase();
+  if (!ALLOWED_STATUSES.has(status)) {
+    console.warn("[Meta webhook] template_status_update: unrecognised event", { event });
+    return;
+  }
+
+  const page = await prisma.facebookPage.findFirst({
+    where: { pageId: metaPageId },
+    select: { id: true },
+  });
+  if (!page) {
+    console.warn("[Meta webhook] template_status_update: no page found for metaPageId", { metaPageId });
+    return;
+  }
+
+  const metaIdStr = value.message_template_id ? String(value.message_template_id) : null;
+
+  const updateData = {
+    status,
+    lastCheckedAt: new Date(),
+    lastError:
+      status === "REJECTED" ? "Template rejected by Meta; review content and re-register"
+      : status === "DISABLED" ? "Template disabled by Meta"
+      : null,
+    ...(metaIdStr && { metaTemplateId: metaIdStr }),
+  };
+
+  const result = await prisma.utilityTemplateRegistration.updateMany({
+    where: { pageId: page.id, metaTemplateName: templateName },
+    data: updateData,
+  });
+
+  console.log("[Meta webhook] template_status_update processed", {
+    metaPageId,
+    templateName,
+    status,
+    rowsUpdated: result.count,
+  });
 }
 
 // ── Helper: find conversation from page ID and user PSID ──────────────────────
