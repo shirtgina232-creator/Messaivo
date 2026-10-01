@@ -297,9 +297,13 @@ function Step2Template({ pageId, selected, onSelect }: {
           <FileText size={28} style={{ color: "#8B95A7", opacity: 0.4 }} />
           <p className="text-[13px] font-medium" style={{ color: "#8B95A7" }}>No approved utility templates</p>
           <p className="text-[11.5px] text-center leading-relaxed max-w-xs" style={{ color: "rgba(139,149,167,0.7)" }}>
-            Utility templates must be registered and approved by Meta before broadcasts can be sent.
-            Ask an admin to register a template for this page.
+            Utility templates must be enabled for this page and approved by Meta before broadcasts can be sent.
           </p>
+          <a href="/app/templates"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold text-white"
+            style={{ background: "#6C63FF" }}>
+            <ArrowRight size={11} /> Enable Templates
+          </a>
         </div>
       ) : (
         <div className="flex flex-col gap-2">
