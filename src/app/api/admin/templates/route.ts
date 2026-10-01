@@ -9,7 +9,15 @@ export async function GET() {
   const [, err] = await requireAdminOrError();
   if (err) return err;
   try {
-    const templates = await prisma.globalTemplate.findMany({ orderBy: { createdAt: "desc" } });
+    const templates = await prisma.globalTemplate.findMany({
+      orderBy: { createdAt: "desc" },
+      include: {
+        utilityRegistrations: {
+          select: { id: true, pageId: true, status: true, metaTemplateName: true, metaTemplateId: true, lastCheckedAt: true, lastError: true },
+          orderBy: { updatedAt: "desc" },
+        },
+      },
+    });
     return ok({ templates });
   } catch (e) {
     console.error("[GET /api/admin/templates]", e);
@@ -39,6 +47,7 @@ export async function POST(req: Request) {
         category,
         status,
         isActive: status === "active",
+        isUtility: typeof data.isUtility === "boolean" ? data.isUtility : false,
         createdBy: admin.id,
       },
     });

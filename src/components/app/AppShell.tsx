@@ -35,8 +35,9 @@ const NAV = [
   {
     section: "MANAGE",
     items: [
-      { label: "Connections", icon: Link2,  href: "/app/pages"  },
-      { label: "Groups",      icon: Layers, href: "/app/groups" },
+      { label: "Connections", icon: Link2,     href: "/app/pages"      },
+      { label: "Templates",   icon: FileText,  href: "/app/templates"  },
+      { label: "Groups",      icon: Layers,    href: "/app/groups"     },
     ],
   },
   {

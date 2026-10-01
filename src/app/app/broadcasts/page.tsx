@@ -5,11 +5,12 @@ import { useRouter } from "next/navigation";
 import {
   Plus, Search, Send, Loader2, ChevronDown, ChevronRight,
   CheckCircle2, Clock, AlertCircle, X, RefreshCw, Users, FileText,
-  Calendar, MessageSquare, StopCircle, ExternalLink,
+  Calendar, MessageSquare, StopCircle, ExternalLink, Zap,
 } from "lucide-react";
 import { useWorkspace } from "@/lib/workspace-context";
+import BulkTextWizard from "@/components/app/BulkTextWizard";
 
-// ── Types ──────────────────────────────────────────────────────────────────────
+// â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 type BroadcastStatus = "draft" | "scheduled" | "sending" | "completed" | "failed" | "cancelled";
 
@@ -40,6 +41,10 @@ interface AvailableTemplate {
   content: string;
   category: string | null;
   source: "global" | "workspace";
+  isUtility?: boolean;
+  metaTemplateName?: string | null;
+  metaTemplateStatus?: string | null;
+  registeredForPageId?: string | null;
   fields?: Array<{
     key: string; label: string; type: string;
     required: boolean; options?: string[];
@@ -48,7 +53,7 @@ interface AvailableTemplate {
 
 interface GroupItem { id: string; name: string; _count?: { members: number } }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function timeAgo(iso: string) {
   const s = (Date.now() - new Date(iso).getTime()) / 1000;
@@ -59,14 +64,14 @@ function timeAgo(iso: string) {
 }
 
 function fmtDate(iso: string | null) {
-  if (!iso) return "—";
+  if (!iso) return "â€”";
   return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
 function previewText(b: BroadcastItem, maxLen = 60): string {
   const raw = b.message ?? "";
   const clean = raw.replace(/\{\{(\w+)\}\}/g, (_, k) => k);
-  return clean.length > maxLen ? clean.slice(0, maxLen) + "…" : clean;
+  return clean.length > maxLen ? clean.slice(0, maxLen) + "â€¦" : clean;
 }
 
 const STATUS_CFG: Record<BroadcastStatus, { label: string; color: string; bg: string; icon: React.ReactNode }> = {
@@ -78,7 +83,7 @@ const STATUS_CFG: Record<BroadcastStatus, { label: string; color: string; bg: st
   cancelled: { label: "Cancelled", color: "#8B95A7", bg: "rgba(139,149,167,0.12)", icon: <X size={10} /> },
 };
 
-// ── Status Badge ───────────────────────────────────────────────────────────────
+// â”€â”€ Status Badge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function StatusBadge({ status }: { status: string }) {
   const cfg = STATUS_CFG[status as BroadcastStatus] ?? STATUS_CFG.draft;
@@ -90,12 +95,12 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-// ── Progress Bar ───────────────────────────────────────────────────────────────
+// â”€â”€ Progress Bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function ProgressCell({ b }: { b: BroadcastItem }) {
   const total = b.totalRecipients ?? b._count?.recipients ?? 0;
   const sent = b.sentCount ?? 0;
-  if (total === 0) return <span style={{ color: "#8B95A7", fontSize: 12 }}>—</span>;
+  if (total === 0) return <span style={{ color: "#8B95A7", fontSize: 12 }}>â€”</span>;
   const pct = Math.round((sent / total) * 100);
   return (
     <div className="flex flex-col gap-1 min-w-[90px]">
@@ -110,7 +115,7 @@ function ProgressCell({ b }: { b: BroadcastItem }) {
   );
 }
 
-// ── Cancel Confirm Dialog ──────────────────────────────────────────────────────
+// â”€â”€ Cancel Confirm Dialog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function CancelConfirmDialog({ broadcast, onConfirm, onDismiss, cancelling }: {
   broadcast: BroadcastItem;
@@ -169,7 +174,7 @@ function CancelConfirmDialog({ broadcast, onConfirm, onDismiss, cancelling }: {
             className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold"
             style={{ background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.35)", color: "#EF4444" }}>
             {cancelling
-              ? <><Loader2 size={13} className="animate-spin" /> Cancelling…</>
+              ? <><Loader2 size={13} className="animate-spin" /> Cancellingâ€¦</>
               : <><StopCircle size={13} /> Cancel Broadcast</>}
           </button>
         </div>
@@ -178,7 +183,7 @@ function CancelConfirmDialog({ broadcast, onConfirm, onDismiss, cancelling }: {
   );
 }
 
-// ── Broadcasts Table ───────────────────────────────────────────────────────────
+// â”€â”€ Broadcasts Table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function BroadcastsTable({ broadcasts, pageMap, onRefresh, loading, onCancel, onViewDetails }: {
   broadcasts: BroadcastItem[];
@@ -204,7 +209,7 @@ function BroadcastsTable({ broadcasts, pageMap, onRefresh, loading, onCancel, on
           <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#8B95A7" }} />
           <input
             value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="Search broadcasts…"
+            placeholder="Search broadcastsâ€¦"
             className="w-full pl-8 pr-3 py-2 rounded-lg text-[13px] outline-none"
             style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" }}
           />
@@ -231,7 +236,7 @@ function BroadcastsTable({ broadcasts, pageMap, onRefresh, loading, onCancel, on
 
         {loading && broadcasts.length === 0 ? (
           <div className="flex items-center justify-center gap-2 py-16" style={{ color: "#8B95A7" }}>
-            <Loader2 size={16} className="animate-spin" /> Loading broadcasts…
+            <Loader2 size={16} className="animate-spin" /> Loading broadcastsâ€¦
           </div>
         ) : filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 gap-2" style={{ color: "#8B95A7" }}>
@@ -247,7 +252,7 @@ function BroadcastsTable({ broadcasts, pageMap, onRefresh, loading, onCancel, on
                 {/* Row */}
                 <div className="grid items-center px-4 py-3.5 transition-colors hover:bg-white/[0.02]"
                   style={{ gridTemplateColumns: "2fr 1fr 120px 140px 70px 80px" }}>
-                  {/* Campaign — clickable to expand */}
+                  {/* Campaign â€” clickable to expand */}
                   <button
                     onClick={() => setExpanded(prev => {
                       const next = new Set(prev);
@@ -336,7 +341,7 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-// ── New Broadcast Slide Panel ──────────────────────────────────────────────────
+// â”€â”€ New Broadcast Slide Panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // Contact variables auto-resolved per recipient at send time
 const CONTACT_VARS_SET = new Set(["first_name", "last_name", "name", "page_name"]);
@@ -374,45 +379,48 @@ function renderTwoPassPreview(content: string, fieldValues: Record<string, strin
 function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const { pages } = useWorkspace();
 
-  // ── Basic info ─────────────────────────────────────────────────────────────
+  // â”€â”€ Basic info â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [broadcastName, setBroadcastName] = useState("");
   const [pageId, setPageId] = useState(pages[0]?.id ?? "");
 
-  // ── Audience ───────────────────────────────────────────────────────────────
+  // â”€â”€ Audience â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [recipientMode, setRecipientMode] = useState<"all" | "groups">("all");
   const [groups, setGroups] = useState<GroupItem[]>([]);
   const [selectedGroups, setSelectedGroups] = useState<Set<string>>(new Set());
   const [groupsLoading, setGroupsLoading] = useState(false);
 
-  // ── Reachable count ────────────────────────────────────────────────────────
+  // â”€â”€ Reachable count â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [reachable, setReachable] = useState<{
     total: number; eligible: number;
     windowOpen: number; windowClosed: number; neverMessaged: number; unsubscribed: number;
   } | null>(null);
   const [reachableLoading, setReachableLoading] = useState(false);
 
-  // ── Message ────────────────────────────────────────────────────────────────
+  // â”€â”€ Message â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [messageMode, setMessageMode] = useState<"template" | "custom">("template");
   const [templates, setTemplates] = useState<AvailableTemplate[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(true);
   const [selectedTemplate, setSelectedTemplate] = useState<AvailableTemplate | null>(null);
   const [templateSearch, setTemplateSearch] = useState("");
-  // fieldValues: maps variable key (e.g. "1","2") → user-entered value (may contain {{first_name}})
+  // fieldValues: maps variable key (e.g. "1","2") â†’ user-entered value (may contain {{first_name}})
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   // Which field's recipient-var dropdown is open
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
   // Custom message (write-message mode)
   const [customMessage, setCustomMessage] = useState("");
 
-  // ── Schedule ───────────────────────────────────────────────────────────────
+  // â”€â”€ Schedule â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [scheduleMode, setScheduleMode] = useState<"now" | "later">("now");
   const [schedDate, setSchedDate] = useState("");
 
-  // ── Submit ─────────────────────────────────────────────────────────────────
+  // â”€â”€ Submit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
-  // ── Load templates ─────────────────────────────────────────────────────────
+  // â”€â”€ Delivery method â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const [messagingType, setMessagingType] = useState<"response" | "utility">("response");
+
+  // â”€â”€ Load templates â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   useEffect(() => {
     setTemplatesLoading(true);
     fetch(`/api/broadcast-templates?${templateSearch ? `search=${encodeURIComponent(templateSearch)}` : ""}`)
@@ -422,7 +430,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
       .finally(() => setTemplatesLoading(false));
   }, [templateSearch]);
 
-  // ── Load groups ────────────────────────────────────────────────────────────
+  // â”€â”€ Load groups â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   useEffect(() => {
     if (recipientMode !== "groups") return;
     setGroupsLoading(true);
@@ -433,7 +441,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
       .finally(() => setGroupsLoading(false));
   }, [recipientMode]);
 
-  // ── Init field values when template changes ────────────────────────────────
+  // â”€â”€ Init field values when template changes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   useEffect(() => {
     if (!selectedTemplate) { setFieldValues({}); return; }
     const vars = extractCustomVars(selectedTemplate.content);
@@ -444,12 +452,12 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
     });
   }, [selectedTemplate?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Clear when switching to custom ────────────────────────────────────────
+  // â”€â”€ Clear when switching to custom â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   useEffect(() => {
     if (messageMode === "custom") { setSelectedTemplate(null); setFieldValues({}); }
   }, [messageMode]);
 
-  // ── Live reachable count ───────────────────────────────────────────────────
+  // â”€â”€ Live reachable count â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const reachableTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!pageId) { setReachable(null); return; }
@@ -484,16 +492,13 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
     !templateSearch || t.name.toLowerCase().includes(templateSearch.toLowerCase())
   );
 
-  // Sending mode: template broadcast vs. standard message
-  const isTemplateBroadcast = messageMode === "template" && !!selectedTemplate;
-
   // Audience counts derived from a single eligibility fetch:
-  // - Standard (Write Message): only contacts with 24h window open
-  // - Template Broadcast: contacts who have EVER messaged (windowOpen + windowClosed)
-  //   — these can be reached via platform template mechanics outside the standard window
-  const standardReachable  = reachable?.windowOpen ?? 0;
-  const templateEligible   = (reachable?.windowOpen ?? 0) + (reachable?.windowClosed ?? 0);
-  const displayEligible    = isTemplateBroadcast ? templateEligible : standardReachable;
+  // - UTILITY mode: works outside the 24-hour window â€” all contacts who have EVER messaged
+  //   (windowOpen + windowClosed); neverMessaged still can't be reached (no PSID conversation)
+  // - RESPONSE / standard template: requires 24-hour window to be open (windowOpen only)
+  const utilityEligible  = (reachable?.windowOpen ?? 0) + (reachable?.windowClosed ?? 0);
+  const standardReachable = reachable?.windowOpen ?? 0;
+  const displayEligible   = messagingType === "utility" ? utilityEligible : standardReachable;
 
   // Derive variables and preview
   const customVars = selectedTemplate ? extractCustomVars(selectedTemplate.content) : [];
@@ -509,12 +514,20 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
 
   const allRequiredFilled = customVars.every(v => (fieldValues[v] ?? "").trim() !== "");
 
+  // For utility mode, the selected template must be registered & approved with Meta for this page
+  const utilityTemplateReady = messagingType === "utility"
+    ? (selectedTemplate?.isUtility === true &&
+       selectedTemplate?.metaTemplateStatus === "APPROVED" &&
+       (!selectedTemplate?.registeredForPageId || selectedTemplate.registeredForPageId === pageId))
+    : true;
+
   const canSend = !!pageId && !!broadcastName.trim() &&
     (messageMode === "template"
       ? !!selectedTemplate && allRequiredFilled
       : !!customMessage.trim()) &&
     (scheduleMode === "now" || !!schedDate) &&
-    (recipientMode === "all" || selectedGroups.size > 0);
+    (recipientMode === "all" || selectedGroups.size > 0) &&
+    utilityTemplateReady;
 
   const handleSend = useCallback(async (mode: "send" | "draft") => {
     if (!pageId) return;
@@ -527,7 +540,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
           body.templateId = selectedTemplate.id;
           body.fieldValues = fieldValues;
         } else {
-          // User template — pass id + field values; worker resolves per-recipient
+          // User template â€” pass id + field values; worker resolves per-recipient
           body.messageTemplateId = selectedTemplate.id;
           body.fieldValues = fieldValues;
         }
@@ -540,6 +553,10 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
 
       if (mode === "send" && scheduleMode === "later" && schedDate) {
         body.scheduledAt = new Date(schedDate).toISOString();
+      }
+
+      if (messagingType === "utility") {
+        body.messagingType = "utility";
       }
 
       const res = await fetch("/api/broadcasts", {
@@ -562,7 +579,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
       onCreated(); onClose();
     } catch { setError("Network error. Please try again."); }
     finally { setSubmitting(false); }
-  }, [pageId, broadcastName, messageMode, selectedTemplate, fieldValues, customMessage, recipientMode, selectedGroups, scheduleMode, schedDate, onCreated, onClose]);
+  }, [pageId, broadcastName, messageMode, selectedTemplate, fieldValues, customMessage, recipientMode, selectedGroups, scheduleMode, schedDate, messagingType, onCreated, onClose]);
 
   const FIELD_STYLE = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" };
 
@@ -586,15 +603,15 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
         {/* Scrollable body */}
         <div className="flex-1 overflow-y-auto px-6 py-5 flex flex-col gap-5">
 
-          {/* ① Name */}
+          {/* â‘  Name */}
           <FormSection label="Broadcast Name">
             <input value={broadcastName} onChange={e => setBroadcastName(e.target.value)}
               placeholder="e.g. September Notification"
               className="w-full px-3 py-2.5 rounded-lg text-[13px] outline-none" style={FIELD_STYLE} />
-            <p className="text-[11px] mt-1" style={{ color: "#8B95A7" }}>Internal name — not visible to recipients.</p>
+            <p className="text-[11px] mt-1" style={{ color: "#8B95A7" }}>Internal name â€” not visible to recipients.</p>
           </FormSection>
 
-          {/* ② Page + subscriber count */}
+          {/* â‘¡ Page + subscriber count */}
           <FormSection label="Select Page">
             <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
               {pages.map(p => (
@@ -615,7 +632,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
             </div>
             <div className="mt-2">
               {reachableLoading
-                ? <span className="flex items-center gap-1 text-[11.5px]" style={{ color: "#8B95A7" }}><Loader2 size={10} className="animate-spin" /> Counting audience…</span>
+                ? <span className="flex items-center gap-1 text-[11.5px]" style={{ color: "#8B95A7" }}><Loader2 size={10} className="animate-spin" /> Counting audienceâ€¦</span>
                 : reachable !== null
                 ? <div className="flex flex-col gap-1.5">
                     {/* Total + mode badge */}
@@ -626,23 +643,23 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
                       </div>
                       <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
                         style={{
-                          background: isTemplateBroadcast ? "rgba(108,99,255,0.12)" : "rgba(16,185,129,0.10)",
-                          color: isTemplateBroadcast ? "#8B85FF" : "#10B981",
-                          border: `1px solid ${isTemplateBroadcast ? "rgba(108,99,255,0.25)" : "rgba(16,185,129,0.2)"}`,
+                          background: messagingType === "utility" ? "rgba(108,99,255,0.12)" : "rgba(16,185,129,0.10)",
+                          color: messagingType === "utility" ? "#8B85FF" : "#10B981",
+                          border: `1px solid ${messagingType === "utility" ? "rgba(108,99,255,0.25)" : "rgba(16,185,129,0.2)"}`,
                         }}>
-                        {isTemplateBroadcast ? "Template Broadcast" : "Standard Message"}
+                        {messagingType === "utility" ? "Utility Broadcast" : "Standard Message"}
                       </span>
                     </div>
 
                     {/* Mode-aware breakdown */}
-                    {isTemplateBroadcast ? (
-                      /* Template mode — windowOpen + windowClosed are eligible */
+                    {messagingType === "utility" ? (
+                      /* Utility mode â€” works outside 24h window; all who have ever messaged are eligible */
                       <div className="rounded-lg p-2.5 flex flex-col gap-1.5"
                         style={{ background: "rgba(108,99,255,0.06)", border: "1px solid rgba(108,99,255,0.18)" }}>
                         <div className="flex items-center gap-1.5">
                           <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "#8B85FF" }} />
                           <span className="text-[11px]" style={{ color: "#8B95A7" }}>
-                            <strong style={{ color: "#8B85FF" }}>{templateEligible.toLocaleString()}</strong> eligible for template broadcast
+                            <strong style={{ color: "#8B85FF" }}>{utilityEligible.toLocaleString()}</strong> eligible for utility broadcast
                             <span style={{ opacity: 0.6 }}> (have previously messaged this page)</span>
                           </span>
                         </div>
@@ -656,7 +673,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
                           <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "#F59E0B" }} />
                           <span className="text-[11px]" style={{ color: "#8B95A7" }}>
                             <strong style={{ color: "#F59E0B" }}>{reachable.windowClosed.toLocaleString()}</strong> outside 24h window
-                            <span style={{ opacity: 0.6 }}> (reached via template)</span>
+                            <span style={{ opacity: 0.6 }}> (reachable via utility template)</span>
                           </span>
                         </div>
                         {(reachable.neverMessaged + reachable.unsubscribed) > 0 && (
@@ -670,7 +687,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
                         )}
                       </div>
                     ) : (
-                      /* Standard mode — 24h window only */
+                      /* Standard mode â€” 24h window only */
                       <div className="grid grid-cols-2 gap-1.5 rounded-lg p-2.5"
                         style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)" }}>
                         <div className="flex items-center gap-1.5">
@@ -704,9 +721,9 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
                     )}
 
                     {/* Hint to select a template when window is closed */}
-                    {!isTemplateBroadcast && reachable.windowOpen === 0 && reachable.windowClosed > 0 && (
+                    {messagingType !== "utility" && reachable.windowOpen === 0 && reachable.windowClosed > 0 && (
                       <p className="text-[11px] leading-relaxed" style={{ color: "#8B85FF" }}>
-                        💡 Select a template above to reach {templateEligible.toLocaleString()} contacts outside the 24h window.
+                        ðŸ’¡ Switch to Utility mode to reach {utilityEligible.toLocaleString()} contacts outside the 24h window.
                       </p>
                     )}
                   </div>
@@ -714,7 +731,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
             </div>
           </FormSection>
 
-          {/* ③ Audience */}
+          {/* â‘¢ Audience */}
           <FormSection label="Send To">
             <div className="flex gap-2">
               {([["all", "All Subscribers"], ["groups", "Specific Groups"]] as const).map(([m, lbl]) => (
@@ -730,7 +747,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
             {recipientMode === "groups" && (
               <div className="mt-2 rounded-lg overflow-hidden" style={{ border: "1px solid rgba(255,255,255,0.07)" }}>
                 {groupsLoading
-                  ? <div className="flex items-center gap-2 p-3 text-[12px]" style={{ color: "#8B95A7" }}><Loader2 size={12} className="animate-spin" /> Loading groups…</div>
+                  ? <div className="flex items-center gap-2 p-3 text-[12px]" style={{ color: "#8B95A7" }}><Loader2 size={12} className="animate-spin" /> Loading groupsâ€¦</div>
                   : groups.length === 0
                   ? <p className="p-3 text-[12px]" style={{ color: "#8B95A7" }}>No groups found.</p>
                   : groups.map((g, i) => (
@@ -752,7 +769,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
             )}
           </FormSection>
 
-          {/* ④ Message */}
+          {/* â‘£ Message */}
           <FormSection label="Message">
             {/* Mode tabs */}
             <div className="flex gap-2 mb-3">
@@ -776,11 +793,11 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
                   <div className="relative">
                     <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#8B95A7" }} />
                     <input value={templateSearch} onChange={e => setTemplateSearch(e.target.value)}
-                      placeholder="Search templates…" className="w-full pl-8 pr-3 py-2 rounded-lg text-[12.5px] outline-none" style={FIELD_STYLE} />
+                      placeholder="Search templatesâ€¦" className="w-full pl-8 pr-3 py-2 rounded-lg text-[12.5px] outline-none" style={FIELD_STYLE} />
                   </div>
                   <div className="flex flex-col gap-1.5 max-h-44 overflow-y-auto pr-1">
                     {templatesLoading
-                      ? <div className="flex items-center gap-2 py-3 justify-center text-[12px]" style={{ color: "#8B95A7" }}><Loader2 size={12} className="animate-spin" /> Loading templates…</div>
+                      ? <div className="flex items-center gap-2 py-3 justify-center text-[12px]" style={{ color: "#8B95A7" }}><Loader2 size={12} className="animate-spin" /> Loading templatesâ€¦</div>
                       : filteredTemplates.length === 0
                       ? <p className="py-3 text-center text-[12px]" style={{ color: "#8B95A7" }}>No approved templates available.</p>
                       : filteredTemplates.map(t => (
@@ -790,12 +807,18 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
                             background: selectedTemplate?.id === t.id ? "rgba(108,99,255,0.12)" : "rgba(255,255,255,0.03)",
                             border: `1px solid ${selectedTemplate?.id === t.id ? "rgba(108,99,255,0.35)" : "rgba(255,255,255,0.06)"}`,
                           }}>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-[12.5px] font-medium" style={{ color: "#F5F7FA" }}>{t.name}</span>
                             <span className="text-[10px] px-1.5 py-0.5 rounded font-medium"
                               style={{ background: t.source === "global" ? "rgba(16,185,129,0.12)" : "rgba(108,99,255,0.12)", color: t.source === "global" ? "#10B981" : "#8B85FF" }}>
                               {t.source === "global" ? "Platform" : "Custom"}
                             </span>
+                            {t.isUtility && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded font-medium"
+                                style={{ background: "rgba(108,99,255,0.15)", color: "#A89DFF", border: "1px solid rgba(108,99,255,0.25)" }}>
+                                Utility
+                              </span>
+                            )}
                             {selectedTemplate?.id === t.id && <CheckCircle2 size={11} className="ml-auto" style={{ color: "#6C63FF" }} />}
                           </div>
                           {t.description && <span className="text-[11px]" style={{ color: "#8B95A7" }}>{t.description}</span>}
@@ -813,12 +836,12 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
                   </div>
                 </div>
 
-                {/* Variable fields — shown when template selected */}
+                {/* Variable fields â€” shown when template selected */}
                 {selectedTemplate && (
                   <div className="flex flex-col gap-1 pt-4" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
                     <div className="flex items-center justify-between mb-2">
                       <p className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "#8B95A7" }}>
-                        {selectedTemplate.name} — Variable Values
+                        {selectedTemplate.name} â€” Variable Values
                       </p>
                       <button onClick={() => setSelectedTemplate(null)} className="text-[10.5px] flex items-center gap-1" style={{ color: "#8B95A7" }}>
                         <X size={10} /> Clear
@@ -830,18 +853,22 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
                       <div className="flex items-start gap-2 p-2.5 rounded-lg mb-2 text-[11.5px]"
                         style={{ background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.15)", color: "#10B981" }}>
                         <CheckCircle2 size={12} className="mt-0.5 shrink-0" />
-                        <span>Contact variables like <code className="font-mono">{"{{first_name}}"}</code> are auto-filled per recipient — no input needed.</span>
+                        <span>Contact variables like <code className="font-mono">{"{{first_name}}"}</code> are auto-filled per recipient â€” no input needed.</span>
                       </div>
                     )}
 
                     {/* One input per positional variable */}
                     {customVars.length === 0 ? (
-                      <p className="text-[12px] py-2 text-center" style={{ color: "#8B95A7" }}>No variable fields — this template has fixed text.</p>
+                      <p className="text-[12px] py-2 text-center" style={{ color: "#8B95A7" }}>No variable fields â€” this template has fixed text.</p>
                     ) : (
-                      customVars.map(varKey => (
+                      customVars.map(varKey => {
+                        const fieldDef = selectedTemplate?.fields?.find(f => f.key === varKey);
+                        const fieldLabel = fieldDef?.label ?? varKey.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+                        return (
                         <div key={varKey} className="mb-3">
                           <label className="text-[12px] font-medium block mb-1.5" style={{ color: "#C4CDD8" }}>
-                            Value for <code className="font-mono text-[11px] px-1 py-0.5 rounded"
+                            {fieldLabel}{" "}
+                            <code className="font-mono text-[11px] px-1 py-0.5 rounded"
                               style={{ background: "rgba(108,99,255,0.12)", color: "#8B85FF" }}>{`{{${varKey}}}`}</code>
                             <span style={{ color: "#EF4444" }}> *</span>
                           </label>
@@ -850,7 +877,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
                             <input
                               value={fieldValues[varKey] ?? ""}
                               onChange={e => setFieldValues(p => ({ ...p, [varKey]: e.target.value }))}
-                              placeholder={`Value for variable ${varKey}`}
+                              placeholder={fieldDef?.label ? `Enter ${fieldLabel.toLowerCase()}` : `Value for variable ${varKey}`}
                               className="w-full px-3 py-2.5 rounded-lg text-[13px] outline-none"
                               style={FIELD_STYLE}
                               onClick={() => setOpenDropdown(null)}
@@ -885,7 +912,8 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
                             </span>
                           </div>
                         </div>
-                      ))
+                        );
+                      })
                     )}
 
                     {/* Live preview */}
@@ -897,7 +925,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
                         <span className="ml-auto text-[10px]" style={{ color: "rgba(139,149,167,0.5)" }}>Sample: John Doe</span>
                       </div>
                       <div className="px-4 py-3 text-[13px] leading-relaxed whitespace-pre-wrap" style={{ color: "#C4CDD8", fontFamily: "inherit" }}>
-                        {previewContent || <span style={{ color: "#8B95A7", fontStyle: "italic" }}>Fill in variable values to see preview…</span>}
+                        {previewContent || <span style={{ color: "#8B95A7", fontStyle: "italic" }}>Fill in variable values to see previewâ€¦</span>}
                       </div>
                     </div>
                   </div>
@@ -908,7 +936,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
               <div className="flex flex-col gap-3">
                 <textarea
                   value={customMessage} onChange={e => setCustomMessage(e.target.value)}
-                  rows={5} placeholder="Type your message here…"
+                  rows={5} placeholder="Type your message hereâ€¦"
                   className="w-full px-3 py-2.5 rounded-lg text-[13px] outline-none resize-y leading-relaxed"
                   style={{ ...FIELD_STYLE, minHeight: 100 }} />
                 {customMessage && (
@@ -934,7 +962,68 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
             )}
           </FormSection>
 
-          {/* ⑤ Schedule */}
+          {/* â‘¤ Delivery Method */}
+          <FormSection label="Delivery Method">
+            <div className="flex gap-2">
+              {([
+                ["response", "Standard Response",   "Requires active 24-hour window"] as const,
+                ["utility",  "Utility Notification", "messaging_type: UTILITY â€” outside 24h window"] as const,
+              ]).map(([m, lbl, sub]) => (
+                <button key={m}
+                  onClick={() => { setMessagingType(m); }}
+                  className="flex-1 flex flex-col items-start gap-0.5 px-3 py-2.5 rounded-lg"
+                  style={{
+                    background: messagingType === m ? "rgba(108,99,255,0.12)" : "rgba(255,255,255,0.03)",
+                    border: `1px solid ${messagingType === m ? "rgba(108,99,255,0.35)" : "rgba(255,255,255,0.07)"}`,
+                  }}>
+                  <span className="text-[12.5px] font-medium" style={{ color: messagingType === m ? "#F5F7FA" : "#8B95A7" }}>{lbl}</span>
+                  <span className="text-[10.5px]" style={{ color: "rgba(139,149,167,0.55)" }}>{sub}</span>
+                </button>
+              ))}
+            </div>
+
+            {messagingType === "utility" && (
+              <div className="mt-3 flex flex-col gap-2">
+                {/* Show registration status of the selected template */}
+                {selectedTemplate && messageMode === "template" && (
+                  selectedTemplate.isUtility && selectedTemplate.metaTemplateStatus === "APPROVED" &&
+                  (!selectedTemplate.registeredForPageId || selectedTemplate.registeredForPageId === pageId)
+                  ? (
+                    <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-[11px]"
+                      style={{ background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.2)", color: "#10B981" }}>
+                      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "#10B981" }} />
+                      Template registered and approved by Meta â€” ready to send as utility message.
+                    </div>
+                  ) : selectedTemplate.isUtility && selectedTemplate.metaTemplateStatus && selectedTemplate.metaTemplateStatus !== "APPROVED" ? (
+                    <div className="flex items-start gap-2 p-2.5 rounded-lg text-[11px]"
+                      style={{ background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.2)", color: "#F59E0B" }}>
+                      <AlertCircle size={11} className="mt-0.5 shrink-0" />
+                      <span>Template status: <strong>{selectedTemplate.metaTemplateStatus}</strong>. Wait for Meta approval before sending.</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-start gap-2 p-2.5 rounded-lg text-[11px]"
+                      style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.15)", color: "#EF4444" }}>
+                      <AlertCircle size={11} className="mt-0.5 shrink-0" />
+                      <span>
+                        {selectedTemplate.isUtility
+                          ? "This template is not yet registered with Meta for the selected page. Ask an admin to register it."
+                          : "Selected template is not a utility template. Choose a utility template, or ask an admin to register one."}
+                      </span>
+                    </div>
+                  )
+                )}
+                {(!selectedTemplate || messageMode !== "template") && (
+                  <div className="flex items-start gap-2 p-2.5 rounded-lg text-[11px]"
+                    style={{ background: "rgba(108,99,255,0.06)", border: "1px solid rgba(108,99,255,0.15)", color: "#8B95A7" }}>
+                    <AlertCircle size={11} className="mt-0.5 shrink-0" />
+                    <span>Select a utility template above. Utility messages require a pre-approved Meta template â€” transactional content only (order confirmations, delivery updates, appointment reminders). No promotional content.</span>
+                  </div>
+                )}
+              </div>
+            )}
+          </FormSection>
+
+          {/* â‘¥ Schedule */}
           <FormSection label="Schedule (Optional)">
             <div className="flex gap-2 mb-2">
               {([["now", "Send Now"], ["later", "Schedule"]] as const).map(([m, l]) => (
@@ -974,24 +1063,20 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
             className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold text-white"
             style={{ background: "#6C63FF", opacity: (submitting || !canSend) ? 0.5 : 1 }}>
             {submitting
-              ? <><Loader2 size={14} className="animate-spin" /> {scheduleMode === "later" ? "Scheduling…" : isTemplateBroadcast ? "Sending Template…" : "Sending…"}</>
+              ? <><Loader2 size={14} className="animate-spin" /> {scheduleMode === "later" ? "Schedulingâ€¦" : "Sendingâ€¦"}</>
               : scheduleMode === "later"
-              ? <><Send size={14} /> {isTemplateBroadcast ? "Schedule Template" : "Schedule Broadcast"}</>
+              ? <><Send size={14} /> {messagingType === "utility" ? "Schedule Utility Message" : "Schedule Broadcast"}</>
               : <>
-                  <Send size={14} /> {isTemplateBroadcast ? "Send Template" : "Send Now"}
+                  <Send size={14} /> {messagingType === "utility" ? "Send Utility Message" : "Send Now"}
                   {reachableLoading
-                    ? <span className="ml-1 opacity-60 text-[12px] font-normal">— counting…</span>
+                    ? <span className="ml-1 opacity-60 text-[12px] font-normal">â€” countingâ€¦</span>
                     : reachable !== null
-                    ? isTemplateBroadcast
+                    ? displayEligible > 0
                       ? <span className="ml-1 text-[12px] font-normal">
-                          — 🔥 <strong style={{ fontWeight: 700 }}>{displayEligible.toLocaleString()} Eligible Customers</strong>
-                        </span>
-                      : displayEligible > 0
-                      ? <span className="ml-1 text-[12px] font-normal">
-                          — 🔥 <strong style={{ fontWeight: 700 }}>{displayEligible.toLocaleString()} Reachable</strong>
+                          â€” ðŸ”¥ <strong style={{ fontWeight: 700 }}>{displayEligible.toLocaleString()} Reachable</strong>
                         </span>
                       : <span className="ml-1 text-[12px] font-normal" style={{ opacity: 0.65 }}>
-                          — <strong style={{ fontWeight: 700 }}>0 Reachable</strong>
+                          â€” <strong style={{ fontWeight: 700 }}>0 Reachable</strong>
                         </span>
                     : null}
                 </>}
@@ -1011,7 +1096,7 @@ function FormSection({ label, children }: { label: string; children: React.React
   );
 }
 
-// ── Main Page ──────────────────────────────────────────────────────────────────
+// â”€â”€ Main Page â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export default function BroadcastsPage() {
   const { pages } = useWorkspace();
@@ -1021,13 +1106,14 @@ export default function BroadcastsPage() {
   const [loading, setLoading] = useState(true);
   const [pageMap, setPageMap] = useState<Record<string, string>>({});
   const [showNew, setShowNew] = useState(false);
+  const [showBulk, setShowBulk] = useState(false);
 
   // Cancel flow
   const [cancelTarget, setCancelTarget] = useState<BroadcastItem | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState("");
 
-  // Build pageId → name map from workspace pages
+  // Build pageId â†’ name map from workspace pages
   useEffect(() => {
     const m: Record<string, string> = {};
     for (const p of pages) m[p.id] = p.name;
@@ -1098,6 +1184,11 @@ export default function BroadcastsPage() {
               <Loader2 size={11} className="animate-spin" /> {sending} sending
             </span>
           )}
+          <button onClick={() => setShowBulk(true)}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-[13px] font-semibold text-white"
+            style={{ background: "rgba(108,99,255,0.15)", border: "1px solid rgba(108,99,255,0.35)", color: "#A89DFF" }}>
+            <Zap size={14} /> Bulk Text
+          </button>
           <button onClick={() => setShowNew(true)}
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-[13px] font-semibold text-white"
             style={{ background: "#6C63FF" }}>
@@ -1131,6 +1222,15 @@ export default function BroadcastsPage() {
         onCancel={b => { setCancelTarget(b); setCancelError(""); }}
         onViewDetails={b => router.push(`/app/broadcasts/${b.id}`)}
       />
+
+      {/* Bulk Text Wizard */}
+      {showBulk && (
+        <BulkTextWizard
+          pages={pages}
+          onClose={() => setShowBulk(false)}
+          onSent={() => { fetchBroadcasts(); }}
+        />
+      )}
 
       {/* New Broadcast Slide Panel */}
       {showNew && (

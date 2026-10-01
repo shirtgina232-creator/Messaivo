@@ -42,6 +42,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       updateData.status = data.status;
       updateData.isActive = data.status === "active";
     }
+    if (typeof data.isUtility === "boolean") updateData.isUtility = data.isUtility;
 
     const template = await prisma.globalTemplate.update({ where: { id }, data: updateData });
     await logAdminAction(admin.id, "UPDATE_GLOBAL_TEMPLATE", id, "GlobalTemplate", { name: template.name, status: template.status });
