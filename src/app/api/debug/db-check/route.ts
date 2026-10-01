@@ -6,7 +6,9 @@ import { NextResponse } from "next/server";
 // Remove or gate behind auth before merging to master.
 
 export async function GET() {
-  if (process.env.NODE_ENV === "production" && !process.env.ENABLE_DB_DEBUG) {
+  // VERCEL_ENV is "production" on the main deployment, "preview" on branch previews.
+  // NODE_ENV is always "production" on Vercel regardless of environment — cannot use it here.
+  if (process.env.VERCEL_ENV === "production" && !process.env.ENABLE_DB_DEBUG) {
     return NextResponse.json({ error: "not available in production" }, { status: 403 });
   }
 
