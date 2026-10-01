@@ -15,7 +15,10 @@ export function recipientEligibility(contact: RecipientContext, workspaceId: str
   if (contact.workspaceId !== workspaceId || contact.pageId !== pageId) return "wrong_page";
   if (!/^\d{5,30}$/.test(contact.metaUserId)) return "invalid_psid";
   if (!contact.isSubscribed) return "unsubscribed";
-  if (!contact.relationshipVerifiedAt || contact.relationshipVerifiedAt > now) return "unverified_relationship";
+  // Fall back to lastMessageAt when relationshipVerifiedAt is null (contacts created before the
+  // column was added still have a valid inbound-message history tracked in lastMessageAt).
+  const verifiedAt = contact.relationshipVerifiedAt ?? contact.lastMessageAt;
+  if (!verifiedAt || verifiedAt > now) return "unverified_relationship";
   if (!utility && (!contact.lastMessageAt || contact.lastMessageAt > now || now.getTime() - contact.lastMessageAt.getTime() >= 86_400_000)) return "window_closed";
   return null;
 }

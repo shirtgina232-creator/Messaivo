@@ -50,10 +50,51 @@ const CONTACT_SAMPLE: Record<string, string> = {
 };
 const CONTACT_VARS = new Set(["first_name", "last_name", "name", "page_name"]);
 
-function renderPreview(content: string, pageName: string): string {
-  const contactSamples = { ...CONTACT_SAMPLE, page_name: pageName };
-  return content.replace(/\{\{(\w+)\}\}/g, (_, k: string) =>
-    k in contactSamples ? (contactSamples as Record<string, string>)[k] : `{{${k}}}`
+// Smart fallback examples for common field key patterns when a field has no defined example
+function smartDefault(key: string): string {
+  const k = key.toLowerCase();
+  if (k.includes("date")) return "Jan 15, 2025";
+  if (k.includes("time")) return "2:00 PM";
+  if (k.includes("amount") || k.includes("total") || k.includes("price") || k.includes("cost")) return "$49.99";
+  if (k.includes("order") || k.includes("id") || k.includes("number")) return "#ORD-10042";
+  if (k.includes("address") || k.includes("location")) return "123 Main St";
+  if (k.includes("url") || k.includes("link")) return "messaivo.com/track";
+  if (k.includes("code")) return "SAVE20";
+  return `[${key.replace(/_/g, " ")}]`;
+}
+
+// Two-pass preview: field examples first (which may contain contact vars), then contact vars.
+// Leaves any still-unresolved placeholders as {{key}} so the user can see what's missing.
+function renderPreview(
+  content: string,
+  pageName: string,
+  fields: Array<{ key: string; example?: string }> | null,
+): string {
+  const contactSamples: Record<string, string> = { ...CONTACT_SAMPLE, page_name: pageName };
+
+  // Build field example map: key → resolved example value
+  const fieldExamples: Record<string, string> = {};
+  for (const [, k] of content.matchAll(/\{\{(\w+)\}\}/g)) {
+    if (CONTACT_VARS.has(k)) continue;
+    const fieldDef = fields?.find(f => f.key === k);
+    const rawExample = fieldDef?.example?.trim();
+    if (rawExample) {
+      // Resolve any contact vars embedded in the example (e.g. example: "{{first_name}}")
+      fieldExamples[k] = rawExample.replace(/\{\{(\w+)\}\}/g, (_, v: string) =>
+        v in contactSamples ? contactSamples[v] : v
+      );
+    } else {
+      fieldExamples[k] = smartDefault(k);
+    }
+  }
+
+  // Pass 1: substitute field examples
+  const pass1 = content.replace(/\{\{(\w+)\}\}/g, (match, k: string) =>
+    k in fieldExamples ? fieldExamples[k] : match
+  );
+  // Pass 2: substitute contact vars
+  return pass1.replace(/\{\{(\w+)\}\}/g, (_, k: string) =>
+    k in contactSamples ? contactSamples[k] : `{{${k}}}`
   );
 }
 
@@ -315,8 +356,9 @@ function Step3Preview({ template, page, eligibleCount, broadcastName, onNameChan
   onNameChange: (v: string) => void;
 }) {
   const vars = extractCustomVars(template.content);
-  const previewText = renderPreview(template.content, page.name);
+  const previewText = renderPreview(template.content, page.name, template.fields);
   const hasContactVars = [...template.content.matchAll(/\{\{(\w+)\}\}/g)].some(([, k]) => CONTACT_VARS.has(k));
+  const hasCustomVars = vars.length > 0;
 
   return (
     <div className="flex flex-col gap-4">
@@ -353,14 +395,14 @@ function Step3Preview({ template, page, eligibleCount, broadcastName, onNameChan
       </div>
 
       {/* Variable notice */}
-      {(hasContactVars || vars.length > 0) && (
+      {(hasContactVars || hasCustomVars) && (
         <div className="flex items-start gap-2 p-3 rounded-lg text-[11.5px]"
           style={{ background: "rgba(108,99,255,0.06)", border: "1px solid rgba(108,99,255,0.15)", color: "#A89DFF" }}>
           <AlertCircle size={12} className="mt-0.5 shrink-0" />
           <span>
-            {hasContactVars && <>Variables like <code className="font-mono">{"{{first_name}}"}</code> will be replaced with each recipient&apos;s real name at send time. </>}
-            {vars.length > 0 && <>Custom fields </>}
-            The preview below uses sample values.
+            Preview uses sample values.
+            {hasContactVars && <> <code className="font-mono">{"{{first_name}}"}</code> etc. will be filled with each recipient&apos;s real name at send time.</>}
+            {hasCustomVars && <> Custom fields ({vars.map(v => <code key={v} className="font-mono">{`{{${v}}}`}</code>)}) require a field value per recipient — set in the broadcast payload.</>}
           </span>
         </div>
       )}
