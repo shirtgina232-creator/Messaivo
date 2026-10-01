@@ -40,5 +40,17 @@ export async function GET() {
     error = e instanceof Error ? e.message : String(e);
   }
 
-  return NextResponse.json({ env: "set", host, ping, ...(error ? { error } : {}) });
+  // Report presence (not values) of every env var the OAuth callback needs.
+  const oauthEnv = {
+    META_APP_ID:              !!process.env.META_APP_ID,
+    META_APP_SECRET:          !!process.env.META_APP_SECRET,
+    META_TOKEN_ENCRYPTION_KEY: (process.env.META_TOKEN_ENCRYPTION_KEY ?? "").length,
+    META_CONFIG_ID:           !!process.env.META_CONFIG_ID,
+    APP_URL:                  process.env.APP_URL ?? "(not set)",
+    VERCEL_ENV:               process.env.VERCEL_ENV ?? "(not set)",
+    CLERK_SECRET_KEY:         !!process.env.CLERK_SECRET_KEY,
+    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
+  };
+
+  return NextResponse.json({ env: "set", host, ping, ...(error ? { error } : {}), oauthEnv });
 }
