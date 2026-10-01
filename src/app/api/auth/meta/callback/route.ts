@@ -299,7 +299,11 @@ export async function GET(req: Request) {
     return res;
 
   } catch (e) {
-    console.error("[meta/callback] unhandled exception:", e instanceof Error ? e.message : String(e));
+    console.error(
+      "[meta/callback] unhandled exception:",
+      e instanceof Error ? e.message : String(e),
+      "\nstack:", e instanceof Error ? (e.stack ?? "(no stack)") : "",
+    );
     return redirect(req, "server_error");
   }
 }
