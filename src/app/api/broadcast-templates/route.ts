@@ -1,3 +1,4 @@
+import { contentHash } from "@/lib/utility-registration";
 import { prisma } from "@/lib/db";
 import { getWorkspace, unauthorized, serverError, ok } from "@/lib/api-helpers";
 
@@ -10,6 +11,8 @@ export async function GET(req: Request) {
     if (!ws) return unauthorized();
 
     const url = new URL(req.url);
+    const pageId = url.searchParams.get("pageId");
+    const registrations = pageId ? await prisma.utilityTemplateRegistration.findMany({ where: { workspaceId: ws.id, pageId, page: { workspaceId: ws.id } } }) : [];
     const category = url.searchParams.get("category") ?? undefined;
     const search = url.searchParams.get("search") ?? "";
 
@@ -21,7 +24,7 @@ export async function GET(req: Request) {
     const [globalTemplates, workspaceTemplates] = await Promise.all([
       prisma.globalTemplate.findMany({
         where: { isActive: true, ...categoryFilter, ...searchFilter },
-        select: { id: true, name: true, description: true, content: true, fields: true, category: true },
+        select: { id: true, name: true, description: true, content: true, fields: true, category: true, isUtility: true, metaTemplateName: true, metaTemplateStatus: true, registeredForPageId: true },
         orderBy: { name: "asc" },
       }),
       prisma.messageTemplate.findMany({
@@ -33,8 +36,8 @@ export async function GET(req: Request) {
 
     // Tag source so the compose UI can distinguish them if needed
     const templates = [
-      ...globalTemplates.map(t => ({ ...t, source: "global" as const })),
-      ...workspaceTemplates.map(t => ({ ...t, source: "workspace" as const })),
+      ...globalTemplates.map(t => { const r = registrations.find(r => r.templateId === t.id && r.contentHash === contentHash(t.content)); return { ...t, source: "global" as const, isUtility: !!r, metaTemplateName: r?.metaTemplateName ?? null, metaTemplateStatus: r?.status ?? null, registeredForPageId: r?.pageId ?? null }; }),
+      ...workspaceTemplates.map(t => ({ ...t, source: "workspace" as const, isUtility: false, metaTemplateName: null, metaTemplateStatus: null, registeredForPageId: null })),
     ];
 
     return ok({ templates });

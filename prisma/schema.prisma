@@ -73,6 +73,9 @@ model FacebookPage {
   tokenExpiresAt    DateTime?
   scanStatus        String    @default("idle")
   lastScannedAt     DateTime?
+  utilityPermissionGranted Boolean @default(false)
+  permissionsCheckedAt DateTime?
+  permissionError String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -80,6 +83,7 @@ model FacebookPage {
   conversations     Conversation[]
   contacts          Contact[]
   messageTemplates  MessageTemplate[]
+  utilityRegistrations UtilityTemplateRegistration[]
 
   @@unique([workspaceId, pageId])
 }
@@ -98,6 +102,7 @@ model Contact {
   lastName       String?
   profilePicUrl  String?
   lastMessageAt  DateTime?
+  relationshipVerifiedAt DateTime?
   totalMessages  Int      @default(0)
   tags           String[] @default([])
   notes          String?
@@ -111,7 +116,7 @@ model Contact {
   broadcastRecipients BroadcastRecipient[]
   groupMemberships    ContactGroupMember[]
 
-  @@unique([workspaceId, metaUserId])
+  @@unique([workspaceId, metaUserId]) // identity stays workspace-scoped; page-scoped dedup enforced by partial unique index in the contact_page_scope migration (a 3-col unique with nullable pageId would silently allow duplicates)
   @@index([workspaceId])
 }
 
@@ -190,8 +195,14 @@ model Broadcast {
   startedAt    DateTime?
   completedAt  DateTime?
 
-  allowSubscriberSend Boolean @default(false) // when true, use MESSAGE_TAG for contacts outside the 24-hour RESPONSE window
-  messagingTag        String?                 // MESSAGE_TAG value: CONFIRMED_EVENT_UPDATE | POST_PURCHASE_UPDATE | ACCOUNT_UPDATE
+  allowSubscriberSend Boolean @default(false) // legacy — kept for existing rows; no longer written by new code
+  messagingTag        String?                 // legacy — kept for existing rows; no longer written by new code
+
+  // Utility template send (replaces deprecated MESSAGE_TAG approach — Meta API v26+)
+  messagingType    String? // "UTILITY" when using Meta utility template; null/absent = RESPONSE
+  metaTemplateName String? // snapshot of GlobalTemplate.metaTemplateName at broadcast-create time
+  utilityRegistrationId String?
+  utilityRegistration UtilityTemplateRegistration? @relation(fields: [utilityRegistrationId], references: [id], onDelete: Restrict)
 
   totalRecipients Int @default(0)
   sent            Int @default(0)
@@ -223,8 +234,13 @@ model BroadcastRecipient {
   deliveredAt   DateTime?
   readAt        DateTime?
   failureReason String?
+  attemptCount Int @default(0)
+  nextAttemptAt DateTime?
+  sendStartedAt DateTime?
+  attemptId String?
 
   @@unique([broadcastId, contactId])
+  @@index([metaMessageId])
 }
 
 // Broadcast delivery job — one per broadcast, drives the async cron worker
@@ -526,5 +542,57 @@ model GlobalTemplate {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  // Meta utility template registration (API v26+)
+  isUtility           Boolean  @default(false) // marks this as a Meta utility template
+  metaTemplateId      String?  // numeric ID returned by Meta's /message_templates API
+  metaTemplateName    String?  // snake_case name returned by Meta's /message_templates API
+  metaTemplateStatus  String?  // APPROVED | PENDING | REJECTED (null = not yet registered)
+  registeredForPageId String?  // Messaivo FacebookPage.id this registration belongs to
+
   broadcasts  Broadcast[]
+  utilityRegistrations UtilityTemplateRegistration[]
+}
+
+// Approval belongs to one Page and one immutable revision, never to the catalog.
+model UtilityTemplateRegistration {
+  id String @id @default(cuid())
+  workspaceId String
+  pageId String
+  page FacebookPage @relation(fields: [pageId], references: [id], onDelete: Restrict)
+  templateId String
+  template GlobalTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  contentHash String
+  content String
+  language String @default("en")
+  parameterKeys String[]
+  metaTemplateId String?
+  metaTemplateName String
+  status String @default("PENDING")
+  lastCheckedAt DateTime?
+  lastError String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  broadcasts Broadcast[]
+  @@unique([pageId, templateId, contentHash])
+  @@index([workspaceId, pageId, status])
+}
+
+// Durable outbox record. Unknown outcomes are held for reconciliation, never retried blindly.
+model MessagingAttempt {
+  id String @id @default(cuid())
+  workspaceId String
+  pageId String
+  contactId String
+  broadcastId String
+  recipientId String?
+  requestKey String
+  status String @default("processing")
+  payload Json
+  metaMessageId String?
+  error String?
+  charged Boolean @default(false)
+  createdAt DateTime @default(now())
+  finishedAt DateTime?
+  @@unique([workspaceId, requestKey])
+  @@index([pageId, metaMessageId])
 }
