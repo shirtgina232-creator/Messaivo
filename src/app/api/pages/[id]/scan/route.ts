@@ -170,7 +170,7 @@ export async function POST(
         const contactUpserts = await Promise.all(
           contactRows.map(row =>
             prisma.contact.upsert({
-              where: { workspaceId_pageId_metaUserId: { workspaceId: row.workspaceId, pageId: row.pageId, metaUserId: row.metaUserId } },
+              where: { workspaceId_metaUserId: { workspaceId: row.workspaceId, metaUserId: row.metaUserId } },
               update: {
                 // Re-associate with the current page on every scan — this corrects
                 // contacts that were scanned under a different internal page ID

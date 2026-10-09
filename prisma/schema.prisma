@@ -116,7 +116,7 @@ model Contact {
   broadcastRecipients BroadcastRecipient[]
   groupMemberships    ContactGroupMember[]
 
-  @@unique([workspaceId, pageId, metaUserId])
+  @@unique([workspaceId, metaUserId]) // identity stays workspace-scoped; page-scoped dedup enforced by partial unique index in the contact_page_scope migration (a 3-col unique with nullable pageId would silently allow duplicates)
   @@index([workspaceId])
 }
 

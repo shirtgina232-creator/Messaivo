@@ -164,7 +164,7 @@ async function handleMessagingEvent(event: MetaMessagingEvent): Promise<void> {
     // Upsert contact
     const contact = await prisma.contact.upsert({
       where: {
-        workspaceId_pageId_metaUserId: { workspaceId: page.workspaceId, pageId: page.id, metaUserId: sender.id },
+        workspaceId_metaUserId: { workspaceId: page.workspaceId, metaUserId: sender.id },
       },
       update: {
         lastMessageAt: new Date(timestamp),
