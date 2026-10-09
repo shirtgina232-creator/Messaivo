@@ -42,6 +42,17 @@ function run(cmd) {
   }
 }
 
+function dbHost() {
+  // Hostname only — never log credentials.
+  try {
+    const u = new URL(process.env.DATABASE_URL ?? "");
+    return `${u.hostname}:${u.port || "5432"}`;
+  } catch {
+    return "(unparseable DATABASE_URL)";
+  }
+}
+
+console.log(`[migrate-preview] target DB host: ${dbHost()}`);
 console.log("[migrate-preview] running `prisma migrate deploy`");
 let r = run("npx prisma migrate deploy");
 
@@ -62,7 +73,21 @@ if (!r.ok && (r.output.includes("P3005") || r.output.includes("not empty"))) {
 }
 
 if (!r.ok) {
-  console.error("[migrate-preview] migration failed — aborting build");
+  if (r.output.includes("P1002") || r.output.includes("Can't reach database server")) {
+    console.error("");
+    console.error("=================================================================");
+    console.error("[migrate-preview] P1002: cannot reach the preview database server");
+    console.error(`[migrate-preview] attempted host: ${dbHost()}`);
+    console.error("[migrate-preview] The preview DATABASE_URL in the Vercel project");
+    console.error("[migrate-preview] settings is unreachable from Vercel (wrong host,");
+    console.error("[migrate-preview] stale/deleted database, or IP allow-listing).");
+    console.error("[migrate-preview] Fix the target=preview DATABASE_URL value in the");
+    console.error("[migrate-preview] Vercel dashboard, then rebuild. Aborting build.");
+    console.error("=================================================================");
+    console.error("");
+  } else {
+    console.error("[migrate-preview] migration failed — aborting build");
+  }
   process.exit(1);
 }
 console.log("[migrate-preview] done");
