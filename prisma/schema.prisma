@@ -577,6 +577,20 @@ model UtilityTemplateRegistration {
   @@index([workspaceId, pageId, status])
 }
 
+// Meta User Data Deletion — one record per signed_request callback
+model DataDeletionRequest {
+  id               String    @id @default(cuid())
+  confirmationCode String    @unique
+  userIdHash       String    // SHA-256 of the Facebook PSID — never stored in plaintext
+  status           String    @default("PROCESSING") // PROCESSING | COMPLETED | FAILED
+  deletedContacts  Int       @default(0)
+  error            String?
+  createdAt        DateTime  @default(now())
+  completedAt      DateTime?
+
+  @@index([createdAt])
+}
+
 // Durable outbox record. Unknown outcomes are held for reconciliation, never retried blindly.
 model MessagingAttempt {
   id String @id @default(cuid())
