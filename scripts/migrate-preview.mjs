@@ -28,6 +28,7 @@ if (env !== "preview") {
 const NEW_MIGRATIONS = new Set([
   "20261007090000_utility_messaging",
   "20261007090001_contact_page_scope",
+  "20261013_add_data_deletion_request",
 ]);
 
 function run(cmd) {
