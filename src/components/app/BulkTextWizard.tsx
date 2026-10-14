@@ -263,17 +263,20 @@ function Step2Template({ pageId, selected, onSelect }: {
 
   useEffect(() => {
     if (!pageId) return;
-    setLoading(true); setError("");
-    fetch(`/api/broadcast-templates?pageId=${encodeURIComponent(pageId)}`)
-      .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
-      .then((d: { templates?: UtilityTemplate[] }) => {
-        const approved = (d.templates ?? []).filter(
-          t => t.isUtility && t.metaTemplateStatus === "APPROVED"
-        );
-        setTemplates(approved);
-      })
-      .catch(() => setError("Failed to load templates."))
-      .finally(() => setLoading(false));
+    const t = setTimeout(() => {
+      setLoading(true); setError("");
+      fetch(`/api/broadcast-templates?pageId=${encodeURIComponent(pageId)}`)
+        .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
+        .then((d: { templates?: UtilityTemplate[] }) => {
+          const approved = (d.templates ?? []).filter(
+            t => t.isUtility && t.metaTemplateStatus === "APPROVED"
+          );
+          setTemplates(approved);
+        })
+        .catch(() => setError("Failed to load templates."))
+        .finally(() => setLoading(false));
+    }, 0);
+    return () => clearTimeout(t);
   }, [pageId]);
 
   return (
@@ -566,9 +569,9 @@ function Step5Sending({ broadcastId, onDone }: { broadcastId: string; onDone: ()
   }, [broadcastId]);
 
   useEffect(() => {
-    fetchProgress();
+    const t = setTimeout(() => { void fetchProgress(); }, 0);
     pollRef.current = setInterval(fetchProgress, 5000);
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+    return () => { clearTimeout(t); if (pollRef.current) clearInterval(pollRef.current); };
   }, [fetchProgress]);
 
   // Stop polling when complete/cancelled/failed
@@ -695,24 +698,31 @@ export default function BulkTextWizard({ pages, onClose, onSent }: {
 
   // Fetch eligibility whenever page changes
   useEffect(() => {
-    if (!pageId) { setEligibility(null); return; }
-    setEligibilityLoading(true);
-    fetch("/api/broadcasts/eligibility-check", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pageId, messagingType: "utility" }),
-    })
-      .then(r => r.ok ? r.json() : null)
-      .then((d: EligibilityResult | null) => { if (d) setEligibility(d); })
-      .catch(() => {})
-      .finally(() => setEligibilityLoading(false));
+    if (!pageId) return;
+    const t = setTimeout(() => {
+      setEligibility(null);
+      setEligibilityLoading(true);
+      fetch("/api/broadcasts/eligibility-check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pageId, messagingType: "utility" }),
+      })
+        .then(r => r.ok ? r.json() : null)
+        .then((d: EligibilityResult | null) => { if (d) setEligibility(d); })
+        .catch(() => {})
+        .finally(() => setEligibilityLoading(false));
+    }, 0);
+    return () => clearTimeout(t);
   }, [pageId]);
 
   // Auto-generate broadcast name when template/page selected
   useEffect(() => {
     if (!template || !selectedPage) return;
-    const date = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-    setBroadcastName(`${template.name} – ${selectedPage.name} – ${date}`);
+    const t = setTimeout(() => {
+      const date = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+      setBroadcastName(`${template.name} – ${selectedPage.name} – ${date}`);
+    }, 0);
+    return () => clearTimeout(t);
   }, [template?.id, selectedPage?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const utilityEligible = (eligibility?.windowOpen ?? 0) + (eligibility?.windowClosed ?? 0);

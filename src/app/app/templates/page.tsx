@@ -172,12 +172,15 @@ export default function TemplatesPage() {
   // Load templates for selected page
   useEffect(() => {
     if (!selectedPageId) return;
-    setLoadingTemplates(true); setTemplatesError(null);
-    fetch(`/api/pages/${encodeURIComponent(selectedPageId)}/utility-templates`)
-      .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
-      .then((d: { templates?: UtilityTemplate[] }) => setTemplates(d.templates ?? []))
-      .catch(() => setTemplatesError("Failed to load templates. Please try again."))
-      .finally(() => setLoadingTemplates(false));
+    const t = setTimeout(() => {
+      setLoadingTemplates(true); setTemplatesError(null);
+      fetch(`/api/pages/${encodeURIComponent(selectedPageId)}/utility-templates`)
+        .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
+        .then((d: { templates?: UtilityTemplate[] }) => setTemplates(d.templates ?? []))
+        .catch(() => setTemplatesError("Failed to load templates. Please try again."))
+        .finally(() => setLoadingTemplates(false));
+    }, 0);
+    return () => clearTimeout(t);
   }, [selectedPageId]);
 
   const selectedPage = pages.find(p => p.id === selectedPageId);
