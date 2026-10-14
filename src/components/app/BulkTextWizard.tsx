@@ -7,6 +7,7 @@ import {
   Send, Loader2, AlertCircle, RefreshCw, ArrowRight, ExternalLink,
   Zap, Check,
 } from "lucide-react";
+import { templateKeys, isPositionalKeys } from "@/lib/messaging-policy";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -297,13 +298,9 @@ function Step2Template({ pageId, selected, onSelect }: {
           <FileText size={28} style={{ color: "#8B95A7", opacity: 0.4 }} />
           <p className="text-[13px] font-medium" style={{ color: "#8B95A7" }}>No approved utility templates</p>
           <p className="text-[11.5px] text-center leading-relaxed max-w-xs" style={{ color: "rgba(139,149,167,0.7)" }}>
-            Utility templates must be enabled for this page and approved by Meta before broadcasts can be sent.
+            Utility templates are provisioned automatically when you connect a page.
+            If none appear, contact support — our team will enable them for you.
           </p>
-          <a href="/app/templates"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold text-white"
-            style={{ background: "#6C63FF" }}>
-            <ArrowRight size={11} /> Enable Templates
-          </a>
         </div>
       ) : (
         <div className="flex flex-col gap-2">
@@ -352,14 +349,17 @@ function Step2Template({ pageId, selected, onSelect }: {
 
 // ── Step 3: Preview ───────────────────────────────────────────────────────────
 
-function Step3Preview({ template, page, eligibleCount, broadcastName, onNameChange }: {
+function Step3Preview({ template, page, eligibleCount, broadcastName, onNameChange, fieldValues, onFieldValuesChange }: {
   template: UtilityTemplate;
   page: Page;
   eligibleCount: number;
   broadcastName: string;
   onNameChange: (v: string) => void;
+  fieldValues: Record<string, string>;
+  onFieldValuesChange: (v: Record<string, string>) => void;
 }) {
   const vars = extractCustomVars(template.content);
+  const positionalKeys = (() => { try { const k = templateKeys(template.content); return isPositionalKeys(k) ? k : []; } catch { return []; } })();
   const previewText = renderPreview(template.content, page.name, template.fields);
   const hasContactVars = [...template.content.matchAll(/\{\{(\w+)\}\}/g)].some(([, k]) => CONTACT_VARS.has(k));
   const hasCustomVars = vars.length > 0;
@@ -406,8 +406,37 @@ function Step3Preview({ template, page, eligibleCount, broadcastName, onNameChan
           <span>
             Preview uses sample values.
             {hasContactVars && <> <code className="font-mono">{"{{first_name}}"}</code> etc. will be filled with each recipient&apos;s real name at send time.</>}
-            {hasCustomVars && <> Custom fields ({vars.map(v => <code key={v} className="font-mono">{`{{${v}}}`}</code>)}) require a field value per recipient — set in the broadcast payload.</>}
+            {hasCustomVars && !positionalKeys.length && <> Custom fields ({vars.map(v => <code key={v} className="font-mono">{`{{${v}}}`}</code>)}) require a field value per recipient — set in the broadcast payload.</>}
           </span>
+        </div>
+      )}
+
+      {/* Positional parameter values (Meta library templates use {{1}}, {{2}}) */}
+      {positionalKeys.length > 0 && (
+        <div className="flex flex-col gap-2.5">
+          <p className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "#8B95A7" }}>
+            Template values
+          </p>
+          {positionalKeys.map(k => {
+            const example = template.fields?.find(f => f.key === k)?.example;
+            return (
+              <div key={k} className="flex flex-col gap-1">
+                <label className="text-[11.5px] font-medium" style={{ color: "#C4CDD8" }}>
+                  Value {k} <span className="font-mono" style={{ color: "#8B95A7" }}>{`{{${k}}}`}</span>
+                </label>
+                <input
+                  value={fieldValues[k] ?? ""}
+                  onChange={e => onFieldValuesChange({ ...fieldValues, [k]: e.target.value })}
+                  placeholder={example || `Enter value for {{${k}}}`}
+                  className="w-full px-3 py-2 rounded-lg text-[13px] outline-none"
+                  style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" }}
+                />
+              </div>
+            );
+          })}
+          <p className="text-[11px]" style={{ color: "rgba(139,149,167,0.6)" }}>
+            These values are sent to every recipient in order.
+          </p>
         </div>
       )}
 
@@ -654,6 +683,7 @@ export default function BulkTextWizard({ pages, onClose, onSent }: {
   const [step, setStep] = useState(0); // 0=Page 1=Template 2=Preview 3=Confirm 4=Sending
   const [pageId, setPageId] = useState(pages[0]?.id ?? "");
   const [template, setTemplate] = useState<UtilityTemplate | null>(null);
+  const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   const [broadcastName, setBroadcastName] = useState("");
   const [eligibility, setEligibility] = useState<EligibilityResult | null>(null);
   const [eligibilityLoading, setEligibilityLoading] = useState(false);
@@ -687,10 +717,26 @@ export default function BulkTextWizard({ pages, onClose, onSent }: {
 
   const utilityEligible = (eligibility?.windowOpen ?? 0) + (eligibility?.windowClosed ?? 0);
 
+  // Reset field values when the selected template changes
+  const handleTemplateSelect = useCallback((t: UtilityTemplate) => {
+    setTemplate(t);
+    setFieldValues({});
+  }, []);
+
   const canAdvance = (() => {
     if (step === 0) return !!pageId;
     if (step === 1) return !!template;
-    if (step === 2) return !!broadcastName.trim();
+    if (step === 2) {
+      if (!broadcastName.trim()) return false;
+      // All positional template values must be filled before confirming
+      try {
+        const keys = template ? templateKeys(template.content) : [];
+        if (isPositionalKeys(keys)) {
+          return keys.every(k => fieldValues[k]?.trim());
+        }
+      } catch { /* malformed template: let the server reject */ }
+      return true;
+    }
     if (step === 3) return true;
     return false;
   })();
@@ -706,6 +752,7 @@ export default function BulkTextWizard({ pages, onClose, onSent }: {
         templateId: template.id,
         messagingType: "utility",
         allPageContacts: true,
+        fieldValues,
       };
       const res = await fetch("/api/broadcasts", {
         method: "POST",
@@ -776,7 +823,7 @@ export default function BulkTextWizard({ pages, onClose, onSent }: {
             <Step1Page
               pages={pages}
               selectedId={pageId}
-              onSelect={id => { setPageId(id); setTemplate(null); }}
+              onSelect={id => { setPageId(id); setTemplate(null); setFieldValues({}); }}
               eligibility={eligibility}
               loading={eligibilityLoading}
             />
@@ -785,7 +832,7 @@ export default function BulkTextWizard({ pages, onClose, onSent }: {
             <Step2Template
               pageId={pageId}
               selected={template}
-              onSelect={t => setTemplate(t)}
+              onSelect={handleTemplateSelect}
             />
           )}
           {step === 2 && selectedPage && template && (
@@ -795,6 +842,8 @@ export default function BulkTextWizard({ pages, onClose, onSent }: {
               eligibleCount={utilityEligible}
               broadcastName={broadcastName}
               onNameChange={setBroadcastName}
+              fieldValues={fieldValues}
+              onFieldValuesChange={setFieldValues}
             />
           )}
           {step === 3 && selectedPage && template && (

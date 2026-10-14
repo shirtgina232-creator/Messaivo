@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { Loader2, CheckCircle2, AlertCircle, Clock, RefreshCw, Zap, FileText, ChevronDown } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Loader2, CheckCircle2, AlertCircle, Clock, Zap, FileText, ChevronDown } from "lucide-react";
 import Link from "next/link";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -55,50 +55,15 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-// ── Template card ─────────────────────────────────────────────────────────────
+// ── Template card (read-only: customers cannot register or submit templates) ──
 
-function TemplateCard({ template, pageId, onUpdate }: {
+function TemplateCard({ template }: {
   template: UtilityTemplate;
-  pageId: string;
-  onUpdate: (templateId: string, reg: RegistrationInfo) => void;
 }) {
-  const [registering, setRegistering] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
 
   const status = template.registration?.status ?? null;
-  const isPending = status === "PENDING" || status === "CREATING";
   const isApproved = status === "APPROVED";
-  const canRegister = !status || status === "REJECTED" || status === "MISSING" || status === "CONTENT_MISMATCH";
-
-  const handleRegister = useCallback(async () => {
-    setRegistering(true); setError(null);
-    try {
-      const res = await fetch(`/api/pages/${encodeURIComponent(pageId)}/templates/${encodeURIComponent(template.id)}/register`, { method: "POST" });
-      const data = await res.json() as { registration?: RegistrationInfo; error?: string };
-      if (!res.ok || !data.registration) throw new Error(data.error ?? "Registration failed");
-      onUpdate(template.id, data.registration);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Registration failed");
-    } finally {
-      setRegistering(false);
-    }
-  }, [pageId, template.id, onUpdate]);
-
-  const handleRefresh = useCallback(async () => {
-    setRefreshing(true); setError(null);
-    try {
-      const res = await fetch(`/api/pages/${encodeURIComponent(pageId)}/utility-templates/${encodeURIComponent(template.id)}/refresh`, { method: "POST" });
-      const data = await res.json() as { registration?: RegistrationInfo; error?: string };
-      if (!res.ok || !data.registration) throw new Error(data.error ?? "Refresh failed");
-      onUpdate(template.id, data.registration);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Refresh failed");
-    } finally {
-      setRefreshing(false);
-    }
-  }, [pageId, template.id, onUpdate]);
 
   return (
     <div className="rounded-xl overflow-hidden" style={{ background: "#101722", border: `1px solid ${isApproved ? "rgba(16,185,129,0.2)" : "rgba(255,255,255,0.07)"}` }}>
@@ -150,17 +115,8 @@ function TemplateCard({ template, pageId, onUpdate }: {
             </p>
           )}
 
-          {/* Error */}
-          {error && (
-            <div className="flex items-start gap-1.5 text-[11.5px] mb-2 p-2 rounded-lg"
-              style={{ background: "rgba(239,68,68,0.08)", color: "#EF4444", border: "1px solid rgba(239,68,68,0.15)" }}>
-              <AlertCircle size={12} className="mt-0.5 shrink-0" />
-              <span>{error}</span>
-            </div>
-          )}
-
           {/* Meta error from registration */}
-          {template.registration?.lastError && !error && status !== "APPROVED" && (
+          {template.registration?.lastError && !isApproved && (
             <div className="flex items-start gap-1.5 text-[11px] mb-2 p-2 rounded-lg"
               style={{ background: "rgba(245,158,11,0.06)", color: "#F59E0B", border: "1px solid rgba(245,158,11,0.12)" }}>
               <AlertCircle size={11} className="mt-0.5 shrink-0" />
@@ -168,33 +124,19 @@ function TemplateCard({ template, pageId, onUpdate }: {
             </div>
           )}
 
-          {/* Actions */}
+          {/* Status footnote */}
           <div className="flex items-center gap-2 flex-wrap">
-            {canRegister && (
-              <button
-                onClick={handleRegister}
-                disabled={registering}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold text-white transition-opacity"
-                style={{ background: "#6C63FF", opacity: registering ? 0.6 : 1 }}>
-                {registering ? <Loader2 size={11} className="animate-spin" /> : <Zap size={11} />}
-                {registering ? "Enabling…" : status === "REJECTED" ? "Re-apply" : "Enable for this page"}
-              </button>
-            )}
-
-            {(isPending || isApproved || status === "MISSING" || status === "CONTENT_MISMATCH") && (
-              <button
-                onClick={handleRefresh}
-                disabled={refreshing}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-opacity"
-                style={{ background: "rgba(255,255,255,0.05)", color: "#8B95A7", border: "1px solid rgba(255,255,255,0.08)", opacity: refreshing ? 0.6 : 1 }}>
-                <RefreshCw size={11} className={refreshing ? "animate-spin" : ""} />
-                {refreshing ? "Checking…" : "Refresh status"}
-              </button>
-            )}
-
-            {isApproved && (
+            {isApproved ? (
               <span className="flex items-center gap-1 text-[11.5px]" style={{ color: "#10B981" }}>
                 <CheckCircle2 size={12} /> Ready to use in Bulk Text
+              </span>
+            ) : status ? (
+              <span className="flex items-center gap-1 text-[11.5px]" style={{ color: "#8B95A7" }}>
+                <Clock size={12} /> Provisioned automatically — awaiting Meta approval
+              </span>
+            ) : (
+              <span className="flex items-center gap-1 text-[11.5px]" style={{ color: "#8B95A7" }}>
+                <Clock size={12} /> Will be provisioned automatically for this page
               </span>
             )}
           </div>
@@ -238,10 +180,6 @@ export default function TemplatesPage() {
       .finally(() => setLoadingTemplates(false));
   }, [selectedPageId]);
 
-  const handleUpdate = useCallback((templateId: string, reg: RegistrationInfo) => {
-    setTemplates(prev => prev.map(t => t.id === templateId ? { ...t, registration: reg } : t));
-  }, []);
-
   const selectedPage = pages.find(p => p.id === selectedPageId);
 
   return (
@@ -250,7 +188,7 @@ export default function TemplatesPage() {
       <div className="mb-6">
         <h1 className="text-[20px] font-bold mb-1" style={{ color: "#F5F7FA" }}>Utility Templates</h1>
         <p className="text-[13px]" style={{ color: "#8B95A7" }}>
-          Enable pre-approved message templates for your Facebook Pages.
+          Pre-approved message templates provisioned automatically for your Facebook Pages.
           Approved templates can be used to reach contacts outside the 24-hour messaging window.
         </p>
       </div>
@@ -329,9 +267,8 @@ export default function TemplatesPage() {
                 style={{ background: "rgba(108,99,255,0.06)", border: "1px solid rgba(108,99,255,0.15)", color: "#A89DFF" }}>
                 <Clock size={13} className="mt-0.5 shrink-0" />
                 <span>
-                  Click <strong>Enable for this page</strong> to submit a template to Meta for review.
-                  Approval typically takes a few minutes to a few hours.
-                  Once <strong>Approved</strong>, the template becomes available in Bulk Text broadcasts.
+                  Templates are provisioned automatically when you connect a page.
+                  Once <strong>Approved</strong>, a template becomes available in Bulk Text broadcasts.
                 </span>
               </div>
 
@@ -339,8 +276,6 @@ export default function TemplatesPage() {
                 <TemplateCard
                   key={t.id}
                   template={t}
-                  pageId={selectedPageId}
-                  onUpdate={handleUpdate}
                 />
               ))}
 

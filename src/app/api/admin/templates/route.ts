@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { requireAdminOrError, logAdminAction } from "@/lib/admin-helpers";
+import { requireAdminOrError, requireSuperAdminOrError, logAdminAction } from "@/lib/admin-helpers";
 import { ok, badRequest, serverError, created } from "@/lib/api-helpers";
 
 const VALID_STATUSES = new Set(["draft", "active", "inactive"]);
@@ -13,7 +13,7 @@ export async function GET() {
       orderBy: { createdAt: "desc" },
       include: {
         utilityRegistrations: {
-          select: { id: true, pageId: true, status: true, metaTemplateName: true, metaTemplateId: true, lastCheckedAt: true, lastError: true },
+          select: { id: true, workspaceId: true, pageId: true, status: true, metaTemplateName: true, metaTemplateId: true, lastCheckedAt: true, lastError: true },
           orderBy: { updatedAt: "desc" },
         },
       },
@@ -26,7 +26,8 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const [admin, err] = await requireAdminOrError();
+  // Template creation is Super Admin only — customers must never create templates.
+  const [admin, err] = await requireSuperAdminOrError();
   if (err) return err;
   try {
     let body: unknown;

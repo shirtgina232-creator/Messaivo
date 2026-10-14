@@ -42,6 +42,56 @@ export async function createMetaUtilityTemplate(token: string, pageId: string, n
   } catch (error) { return { metaTemplateName: name, status: "ERROR", error: error instanceof Error ? error.message : "Registration failed" }; }
 }
 
+// ── Meta template library (pre-approved) ─────────────────────────────────────
+// Library templates use positional parameters ({{1}}, {{2}}). Cloning one to a
+// Page returns APPROVED immediately — no Meta review. Custom templates created
+// via createMetaUtilityTemplate above go through review instead.
+
+export interface LibraryTemplate {
+  name: string;
+  language: string;
+  category: string;
+  topic?: string;
+  usecase?: string;
+  industry?: string[];
+  body: string;
+  body_params?: string[];
+  body_param_types?: string[];
+  buttons?: Array<{ type: string; text: string; url?: string }>;
+  id?: string;
+}
+
+/** Browse Meta's pre-approved utility template library. */
+export async function searchLibraryTemplates(token: string, query = "", language = "en"): Promise<LibraryTemplate[]> {
+  const params = new URLSearchParams({ language });
+  if (query.trim()) params.set("name_or_content", query.trim());
+  const data = await graphRequest(token, `/message_template_library?${params.toString()}`);
+  return ((data.data ?? []) as LibraryTemplate[]).filter(t => t.category === "UTILITY");
+}
+
+export interface CloneLibraryTemplateResult { metaTemplateId?: string; metaTemplateName: string; status: string; error?: string }
+
+/**
+ * Clone a Meta pre-approved library template to a Page's template library.
+ * Returns APPROVED immediately (no review) for library content.
+ * Idempotent by convention: callers must use a deterministic cloneName and
+ * check for an existing template with that name before calling.
+ */
+export async function cloneLibraryTemplate(
+  token: string, pageId: string, cloneName: string, libraryTemplateName: string, language = "en_US",
+): Promise<CloneLibraryTemplateResult> {
+  try {
+    if (!/^[a-z0-9_]+$/.test(cloneName)) throw new Error("Invalid clone name: " + cloneName);
+    if (!/^[a-z0-9_]+$/.test(libraryTemplateName)) throw new Error("Invalid library template name: " + libraryTemplateName);
+    const data = await graphRequest(token, "/" + pageId + "/message_templates", {
+      method: "POST",
+      body: JSON.stringify({ name: cloneName, category: "UTILITY", language, library_template_name: libraryTemplateName }),
+    });
+    if (!data.id) throw new Error("Meta did not return a template ID for the clone; check for an existing template with this name");
+    return { metaTemplateId: String(data.id), metaTemplateName: cloneName, status: data.status || "APPROVED" };
+  } catch (error) { return { metaTemplateName: cloneName, status: "ERROR", error: error instanceof Error ? error.message : "Clone failed" }; }
+}
+
 // ── Conversation scan ─────────────────────────────────────────────────────────
 
 export interface MetaConversationParticipant {

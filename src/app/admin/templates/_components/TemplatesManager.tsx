@@ -38,10 +38,23 @@ type GlobalTemplate = {
   utilityRegistrations?: RegistrationInfo[];
 };
 
-interface PageOption { id: string; pageName: string; }
+interface PageOption {
+  id: string;
+  pageName: string;
+  isActive: boolean;
+  utilityPermissionGranted: boolean;
+  permissionError: string | null;
+}
+
+interface WorkspaceOption {
+  id: string;
+  name: string;
+  pages: PageOption[];
+}
 
 interface RegistrationInfo {
   id: string;
+  workspaceId: string;
   pageId: string;
   status: string;
   metaTemplateName: string;
@@ -334,6 +347,101 @@ function TemplateForm({ initial, onSave, onCancel, saving }: {
   );
 }
 
+// ── Workspace → Page picker (Super Admin: register for a customer's Page) ─────
+// Lists customer workspaces and their connected Pages via the Super Admin-only
+// /api/admin/workspace-pages endpoint. Page access tokens are never exposed.
+
+function WorkspacePagePicker({ onSelect, compact }: {
+  onSelect: (workspaceId: string, pageId: string) => void;
+  compact?: boolean;
+}) {
+  const [workspaces, setWorkspaces] = useState<WorkspaceOption[]>([]);
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState("");
+  const [selectedPageId, setSelectedPageId] = useState("");
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setLoading(true); setError(null);
+      fetch(`/api/admin/workspace-pages?search=${encodeURIComponent(search)}&limit=20`)
+        .then(r => r.ok ? r.json() : Promise.reject(new Error("Failed to load workspaces")))
+        .then((d: { workspaces?: WorkspaceOption[] }) => {
+          const ws = d.workspaces ?? [];
+          setWorkspaces(ws);
+          // Keep selection if still present, else reset
+          const stillThere = ws.find(w => w.id === selectedWorkspaceId);
+          if (!stillThere) { setSelectedWorkspaceId(""); setSelectedPageId(""); onSelect("", ""); }
+        })
+        .catch((e: Error) => setError(e.message))
+        .finally(() => setLoading(false));
+    }, 300);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
+
+  const selectedWorkspace = workspaces.find(w => w.id === selectedWorkspaceId) ?? null;
+  const selectedPage = selectedWorkspace?.pages.find(p => p.id === selectedPageId) ?? null;
+
+  const inp = "w-full px-3 py-2 rounded-lg text-[13px] outline-none";
+  const inpStyle = { background: "#101722", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" };
+
+  return (
+    <div className={`flex flex-col ${compact ? "gap-2" : "gap-3"}`}>
+      <div>
+        <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: "#8B95A7" }}>
+          Customer workspace
+        </label>
+        <input
+          className={inp} style={inpStyle} placeholder="Search workspaces…"
+          value={search} onChange={e => setSearch(e.target.value)} />
+        {loading
+          ? <div className="flex items-center gap-2 py-2 text-[12px]" style={{ color: "#8B95A7" }}><Loader2 size={12} className="animate-spin" /> Loading…</div>
+          : error
+          ? <p className="text-[12px] py-1" style={{ color: "#EF4444" }}>{error}</p>
+          : <select
+              className={`${inp} mt-1.5`} style={inpStyle}
+              value={selectedWorkspaceId}
+              onChange={e => { setSelectedWorkspaceId(e.target.value); setSelectedPageId(""); onSelect(e.target.value, ""); }}>
+              <option value="">Select a workspace…</option>
+              {workspaces.map(w => (
+                <option key={w.id} value={w.id}>{w.name} ({w.pages.length} page{w.pages.length === 1 ? "" : "s"})</option>
+              ))}
+            </select>
+        }
+      </div>
+      {selectedWorkspace && (
+        <div>
+          <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: "#8B95A7" }}>
+            Facebook Page
+          </label>
+          {selectedWorkspace.pages.length === 0
+            ? <p className="text-[12px]" style={{ color: "#F59E0B" }}>This workspace has no active connected pages.</p>
+            : <select
+                className={inp} style={inpStyle}
+                value={selectedPageId}
+                onChange={e => { setSelectedPageId(e.target.value); onSelect(selectedWorkspaceId, e.target.value); }}>
+                <option value="">Select a page…</option>
+                {selectedWorkspace.pages.map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.pageName}{p.utilityPermissionGranted ? "" : " — grant missing"}
+                  </option>
+                ))}
+              </select>
+          }
+          {selectedPage && !selectedPage.utilityPermissionGranted && (
+            <p className="text-[11.5px] mt-1.5" style={{ color: "#F59E0B" }}>
+              This page is missing the <code>pages_utility_messaging</code> grant
+              {selectedPage.permissionError ? `: ${selectedPage.permissionError}` : ". The customer must reconnect the page first."}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Register with Meta Modal ──────────────────────────────────────────────────
 
 function RegisterMetaModal({ template, onCancel, onSuccess }: {
@@ -341,32 +449,20 @@ function RegisterMetaModal({ template, onCancel, onSuccess }: {
   onCancel: () => void;
   onSuccess: (reg: RegistrationInfo) => void;
 }) {
-  const [pages, setPages] = useState<PageOption[]>([]);
-  const [loadingPages, setLoadingPages] = useState(true);
+  const [workspaceId, setWorkspaceId] = useState("");
   const [selectedPageId, setSelectedPageId] = useState("");
   const [registering, setRegistering] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetch("/api/pages?activeOnly=true")
-      .then(r => r.json())
-      .then((d: { pages?: PageOption[] }) => {
-        setPages(d.pages ?? []);
-        if (d.pages?.length) setSelectedPageId(d.pages[0].id);
-      })
-      .catch(() => setError("Failed to load pages"))
-      .finally(() => setLoadingPages(false));
-  }, []);
-
   async function handleRegister() {
-    if (!selectedPageId) return;
+    if (!workspaceId || !selectedPageId) return;
     setRegistering(true);
     setError(null);
     try {
       const res = await fetch(`/api/admin/templates/${template.id}/register-meta`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pageId: selectedPageId }),
+        body: JSON.stringify({ workspaceId, pageId: selectedPageId }),
       });
       const data = await res.json() as { registration?: RegistrationInfo; error?: string };
       if (!res.ok) { setError(data.error ?? "Registration failed"); return; }
@@ -405,19 +501,9 @@ function RegisterMetaModal({ template, onCancel, onSuccess }: {
             Already approved as <strong>{template.utilityRegistrations.find(r => r.status === "APPROVED")?.metaTemplateName}</strong>. Re-registering will create a new template name.
           </div>
         )}
-        <div>
-          <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: "#8B95A7" }}>
-            Register for Page
-          </label>
-          {loadingPages
-            ? <div className="flex items-center gap-2 py-2 text-[12px]" style={{ color: "#8B95A7" }}><Loader2 size={12} className="animate-spin" /> Loading pages…</div>
-            : pages.length === 0
-            ? <p className="text-[12px]" style={{ color: "#EF4444" }}>No active pages found. Connect a Facebook Page first.</p>
-            : <select className={inp} style={inpStyle} value={selectedPageId} onChange={e => setSelectedPageId(e.target.value)}>
-                {pages.map(p => <option key={p.id} value={p.id}>{p.pageName}</option>)}
-              </select>
-          }
-        </div>
+        <WorkspacePagePicker
+          onSelect={(wsId, pgId) => { setWorkspaceId(wsId); setSelectedPageId(pgId); }}
+        />
         {error && (
           <div className="flex items-start gap-2 p-2.5 rounded-lg text-[11.5px]"
             style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", color: "#EF4444" }}>
@@ -433,7 +519,7 @@ function RegisterMetaModal({ template, onCancel, onSuccess }: {
           <button
             className="text-[13px] font-semibold px-4 py-2 rounded-lg text-white flex items-center gap-2 disabled:opacity-40"
             style={{ background: "#6C63FF" }}
-            disabled={registering || !selectedPageId || loadingPages}
+            disabled={registering || !selectedPageId || !workspaceId}
             onClick={handleRegister}>
             {registering ? <><Loader2 size={13} className="animate-spin" /> Registering…</> : <><Zap size={13} /> Register with Meta</>}
           </button>
@@ -450,32 +536,20 @@ function RegistrationPanel({ template, onUpdate }: {
   onUpdate: (regs: RegistrationInfo[]) => void;
 }) {
   const registrations = template.utilityRegistrations ?? [];
-  const [pages, setPages] = useState<PageOption[]>([]);
-  const [loadingPages, setLoadingPages] = useState(true);
+  const [workspaceId, setWorkspaceId] = useState("");
   const [selectedPageId, setSelectedPageId] = useState("");
   const [registering, setRegistering] = useState(false);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetch("/api/pages?activeOnly=true")
-      .then(r => r.json())
-      .then((d: { pages?: PageOption[] }) => {
-        setPages(d.pages ?? []);
-        if (d.pages?.length) setSelectedPageId(d.pages[0].id);
-      })
-      .catch(() => setError("Failed to load pages"))
-      .finally(() => setLoadingPages(false));
-  }, []);
-
   async function handleRegister() {
-    if (!selectedPageId) return;
+    if (!workspaceId || !selectedPageId) return;
     setRegistering(true); setError(null);
     try {
       const res = await fetch(`/api/admin/templates/${template.id}/register-meta`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pageId: selectedPageId }),
+        body: JSON.stringify({ workspaceId, pageId: selectedPageId }),
       });
       const data = await res.json() as { registration?: RegistrationInfo; error?: string };
       if (!res.ok) { setError(data.error ?? "Registration failed"); return; }
@@ -492,7 +566,7 @@ function RegistrationPanel({ template, onUpdate }: {
       const res = await fetch(`/api/admin/templates/${template.id}/refresh-registration`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pageId: reg.pageId, registrationId: reg.id }),
+        body: JSON.stringify({ workspaceId: reg.workspaceId, pageId: reg.pageId, registrationId: reg.id }),
       });
       const data = await res.json() as { registration?: RegistrationInfo; error?: string };
       if (!res.ok) { setError(data.error ?? "Refresh failed"); return; }
@@ -546,7 +620,6 @@ function RegistrationPanel({ template, onUpdate }: {
             </div>
             {registrations.map(reg => {
               const s = sc[reg.status] ?? sc.MISSING;
-              const page = pages.find(p => p.id === reg.pageId);
               const isPending = ["PENDING", "CREATING"].includes(reg.status);
               const isRefreshing = refreshingId === reg.id;
               return (
@@ -554,10 +627,10 @@ function RegistrationPanel({ template, onUpdate }: {
                   style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
                   <div className="flex-1 min-w-0">
                     <div className="text-[12px] font-medium" style={{ color: "#F5F7FA" }}>
-                      {page?.pageName ?? <span style={{ color: "#8B95A7" }}>{reg.pageId}</span>}
-                    </div>
-                    <div className="text-[10px] font-mono mt-0.5" style={{ color: "#8B95A7" }}>
                       {reg.metaTemplateName}
+                    </div>
+                    <div className="text-[10px] font-mono mt-0.5" style={{ color: "rgba(139,149,167,0.6)" }}>
+                      {reg.pageId}
                     </div>
                     {reg.lastError && reg.status !== "APPROVED" && (
                       <div className="text-[10px] mt-0.5" style={{ color: "#EF4444" }}>{reg.lastError}</div>
@@ -585,35 +658,24 @@ function RegistrationPanel({ template, onUpdate }: {
           </div>
         )}
 
-        {/* Register for page */}
+        {/* Register for a customer's page */}
         <div>
           <div className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: "#8B95A7" }}>
             {registrations.length === 0 ? "Register with Meta" : "Register for another page"}
           </div>
-          {loadingPages ? (
-            <div className="flex items-center gap-2 text-[12px]" style={{ color: "#8B95A7" }}>
-              <Loader2 size={12} className="animate-spin" /> Loading pages…
-            </div>
-          ) : pages.length === 0 ? (
-            <p className="text-[12px]" style={{ color: "#EF4444" }}>
-              No active pages. Connect a Facebook Page under Settings first.
-            </p>
-          ) : (
-            <div className="flex gap-2">
-              <select className={inp} style={inpStyle} value={selectedPageId} onChange={e => setSelectedPageId(e.target.value)}>
-                {pages.map(p => <option key={p.id} value={p.id}>{p.pageName}</option>)}
-              </select>
-              <button
-                disabled={registering || !selectedPageId || !template.isUtility}
-                onClick={handleRegister}
-                className="shrink-0 flex items-center gap-2 px-4 py-2 rounded-lg text-[12.5px] font-semibold text-white disabled:opacity-40"
-                style={{ background: "#6C63FF" }}>
-                {registering
-                  ? <><Loader2 size={13} className="animate-spin" /> Registering…</>
-                  : <><Zap size={13} /> Register with Meta</>}
-              </button>
-            </div>
-          )}
+          <WorkspacePagePicker
+            compact
+            onSelect={(wsId, pgId) => { setWorkspaceId(wsId); setSelectedPageId(pgId); }}
+          />
+          <button
+            disabled={registering || !selectedPageId || !workspaceId || !template.isUtility}
+            onClick={handleRegister}
+            className="mt-2 shrink-0 flex items-center gap-2 px-4 py-2 rounded-lg text-[12.5px] font-semibold text-white disabled:opacity-40"
+            style={{ background: "#6C63FF" }}>
+            {registering
+              ? <><Loader2 size={13} className="animate-spin" /> Registering…</>
+              : <><Zap size={13} /> Register with Meta</>}
+          </button>
         </div>
 
         {/* After-registration note */}
@@ -742,7 +804,7 @@ export default function TemplatesManager({ initialTemplates }: { initialTemplate
       const res = await fetch(`/api/admin/templates/${templateId}/refresh-registration`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pageId: reg.pageId, registrationId: reg.id }),
+        body: JSON.stringify({ workspaceId: reg.workspaceId, pageId: reg.pageId, registrationId: reg.id }),
       });
       const data = await res.json() as { registration?: RegistrationInfo };
       if (res.ok && data.registration) {

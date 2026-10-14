@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { requireAdminOrError, logAdminAction } from "@/lib/admin-helpers";
+import { requireAdminOrError, requireSuperAdminOrError, logAdminAction } from "@/lib/admin-helpers";
 import { ok, created, notFound, serverError, badRequest } from "@/lib/api-helpers";
 
 const VALID_STATUSES = new Set(["draft", "active", "inactive"]);
@@ -20,7 +20,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 }
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const [admin, err] = await requireAdminOrError();
+  // Template edits are Super Admin only.
+  const [admin, err] = await requireSuperAdminOrError();
   if (err) return err;
   try {
     const { id } = await params;
@@ -54,7 +55,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 }
 
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const [admin, err] = await requireAdminOrError();
+  // Template deletion is Super Admin only.
+  const [admin, err] = await requireSuperAdminOrError();
   if (err) return err;
   try {
     const { id } = await params;

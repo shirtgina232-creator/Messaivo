@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import TemplatesManager from "./_components/TemplatesManager";
+import AdminTemplatesTabs from "./_components/AdminTemplatesTabs";
 
 export default async function AdminTemplatesPage() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -9,10 +9,11 @@ export default async function AdminTemplatesPage() {
       <div className="mb-6">
         <h1 className="text-[20px] font-semibold mb-1" style={{ color: "#F5F7FA" }}>Template Management</h1>
         <p className="text-[13px]" style={{ color: "#8B95A7" }}>
-          Create and manage message templates. Only <strong style={{ color: "#10B981" }}>Active</strong> templates are visible to customers in the Broadcast template picker.
+          <strong style={{ color: "#10B981" }}>Library</strong> templates are Meta pre-approved and provisioned to every Page automatically.
+          <strong style={{ color: "#8B85FF" }}> Custom</strong> templates are Super Admin-only and require Meta review.
         </p>
       </div>
-      <TemplatesManager initialTemplates={templates} />
+      <AdminTemplatesTabs initialTemplates={templates} />
     </div>
   );
 }

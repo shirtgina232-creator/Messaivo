@@ -24,9 +24,22 @@ export function recipientEligibility(contact: RecipientContext, workspaceId: str
 }
 
 export function templateKeys(content: string): string[] {
-  const keys = [...new Set([...content.matchAll(/\{\{([a-z][a-z0-9_]*)\}\}/g)].map(m => m[1]))];
-  if (/[{}]/.test(content.replace(/\{\{([a-z][a-z0-9_]*)\}\}/g, ""))) throw new Error("Use named placeholders such as {{order_id}}; positional or malformed placeholders are unsupported");
-  return keys;
+  // Positional: {{1}}, {{2}} — Meta library templates. Returned sorted numerically.
+  const positional = [...new Set([...content.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]))]
+    .sort((a, b) => Number(a) - Number(b));
+  // Named: {{order_id}} — custom templates.
+  const named = [...new Set([...content.matchAll(/\{\{([a-z][a-z0-9_]*)\}\}/g)].map(m => m[1]))];
+  const stripped = content
+    .replace(/\{\{(\d+)\}\}/g, "")
+    .replace(/\{\{([a-z][a-z0-9_]*)\}\}/g, "");
+  if (/[{}]/.test(stripped)) throw new Error("Malformed placeholders; use {{1}} positional or {{name}} named");
+  if (positional.length && named.length) throw new Error("Cannot mix positional {{1}} and named {{name}} placeholders");
+  return positional.length ? positional : named;
+}
+
+/** True when keys are positional ({{1}}, {{2}}) rather than named ({{order_id}}). */
+export function isPositionalKeys(keys: string[]): boolean {
+  return keys.length > 0 && keys.every(k => /^\d+$/.test(k));
 }
 
 export function parseFieldValues(input: unknown): Record<string, string> {
@@ -56,17 +69,27 @@ export function resolveMessage(content: string, input: unknown, contact: Pick<Re
     if (!value?.trim()) throw new Error(`Missing template variable: ${key}`);
     parameters[key] = value;
   }
-  return { parameters, text: content.replace(/\{\{([a-z][a-z0-9_]*)\}\}/g, (_, key: string) => parameters[key]) };
+  // Replace both positional {{1}} and named {{name}} placeholders.
+  const text = content.replace(/\{\{(\d+|[a-z][a-z0-9_]*)\}\}/g, (m, key: string) => parameters[key] ?? m);
+  return { parameters, text };
 }
 
 export function utilityPayload(psid: string, name: string, parameters: Record<string, string>, language = "en") {
   if (!/^\d{5,30}$/.test(psid) || !/^[a-z0-9_]+$/.test(name)) throw new Error("Invalid PSID or Meta template name");
   const values = parseFieldValues(parameters);
   if (Object.values(values).some(v => !v.trim())) throw new Error("Empty template parameter");
+  const keys = Object.keys(values);
+  // Meta requires different parameter shapes per template format:
+  // - positional ({{1}}): ordered {type,text} WITHOUT parameter_name (Meta rejects it)
+  // - named ({{order_id}}): parameter_name is required
+  const ordered = isPositionalKeys(keys) ? [...keys].sort((a, b) => Number(a) - Number(b)) : keys;
+  const bodyParams = ordered.map(k => isPositionalKeys(keys)
+    ? { type: "text", text: values[k] }
+    : { type: "text", parameter_name: k, text: values[k] });
   return {
     recipient: { id: psid }, messaging_type: "UTILITY",
-    message: { template: { name, language: { code: language }, components: Object.keys(values).length ? [{
-      type: "body", parameters: Object.entries(values).map(([parameter_name, text]) => ({ type: "text", parameter_name, text })),
+    message: { template: { name, language: { code: language }, components: keys.length ? [{
+      type: "body", parameters: bodyParams,
     }] : [] } },
   };
 }

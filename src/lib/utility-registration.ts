@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { prisma } from "@/lib/db";
 import { decryptToken } from "@/lib/token-crypto";
-import { createMetaUtilityTemplate, graphRequest } from "@/lib/meta-graph";
+import { createMetaUtilityTemplate, cloneLibraryTemplate, graphRequest } from "@/lib/meta-graph";
 import { templateKeys } from "@/lib/messaging-policy";
-import type { FacebookPage, UtilityTemplateRegistration } from "@prisma/client";
+import type { FacebookPage, GlobalTemplate, UtilityTemplateRegistration } from "@prisma/client";
 
 export const contentHash = (content: string) => createHash("sha256").update(content).digest("hex");
 
@@ -38,7 +38,7 @@ export async function verifyPageGrant(page: FacebookPage, utility = true) {
   }
 }
 
-export async function refreshRegistration(registration: UtilityTemplateRegistration, token: string, metaPageId: string) {
+export async function refreshRegistration(registration: UtilityTemplateRegistration, token: string, metaPageId: string, opts?: { allowButtons?: boolean }) {
   // Search only this Page's collection. A global Meta ID lookup is not proof of ownership.
   let after = "";
   let found;
@@ -48,7 +48,9 @@ export async function refreshRegistration(registration: UtilityTemplateRegistrat
     after = !found && response.paging?.next ? response.paging?.cursors?.after || "" : "";
   } while (after);
   const body = found?.components?.find((c: { type: string }) => c.type.toUpperCase() === "BODY");
-  const supported = found && found.category === "UTILITY" && body?.text === registration.content && found.components.length === 1;
+  // Library clones may carry Meta-defined buttons; custom templates must be body-only.
+  const supported = found && found.category === "UTILITY" && body?.text === registration.content &&
+    (opts?.allowButtons ? true : found.components.length === 1);
   return prisma.utilityTemplateRegistration.update({ where: { id: registration.id }, data: {
     metaTemplateId: found?.id ? String(found.id) : registration.metaTemplateId,
     status: !found ? "MISSING" : supported ? String(found.status).toUpperCase() : "CONTENT_MISMATCH",
@@ -89,4 +91,111 @@ export async function registerUtilityTemplate(workspaceId: string, pageId: strin
   const definitions = Array.isArray(template.fields) ? template.fields as Array<{ key: string; example?: string; label?: string }> : [];
   const result = await createMetaUtilityTemplate(token, page.pageId, name, template.content, keys.map(key => ({ key, example: definitions.find(f => f.key === key)?.example || (key.includes("name") ? "Jane" : key.includes("date") ? "2026-10-01" : "12345") })));
   return prisma.utilityTemplateRegistration.update({ where: { id: row.id }, data: { metaTemplateId: result.metaTemplateId, status: result.status, lastError: result.error || null, lastCheckedAt: new Date() } });
+}
+
+// ── Meta library-first auto-provisioning ──────────────────────────────────────
+// Library templates use positional {{1}} params and clone to APPROVED instantly.
+// v1 supports a single library language; multi-language needs a catalog language column.
+
+export const LIBRARY_LANGUAGE = "en_US";
+/** Deterministic Page-local clone name: messaivo_<library_template_name> */
+export const libraryCloneName = (libraryTemplateName: string) => `messaivo_${libraryTemplateName}`;
+const libraryContentHash = (libraryTemplateName: string) =>
+  createHash("sha256").update(`library:${libraryTemplateName}:${LIBRARY_LANGUAGE}`).digest("hex");
+
+/**
+ * Provision one library catalog template to a Page. Idempotent:
+ * 1. DB: existing registration row → refresh status, return (no Meta write).
+ * 2. Meta: template with the deterministic clone name already exists → adopt it.
+ * 3. Otherwise clone. A lost clone response is reconciled by name on retry.
+ */
+export async function provisionLibraryTemplate(
+  workspaceId: string,
+  page: FacebookPage,
+  template: GlobalTemplate,
+  token: string,
+): Promise<{ registration: UtilityTemplateRegistration; created: boolean }> {
+  const libraryName = template.libraryTemplateName;
+  if (!libraryName) throw new Error("Not a library template");
+  const cloneName = libraryCloneName(libraryName);
+  const hash = libraryContentHash(libraryName);
+  const keys = templateKeys(template.content);
+
+  const row = await prisma.utilityTemplateRegistration.upsert({
+    where: { pageId_templateId_contentHash: { pageId: page.id, templateId: template.id, contentHash: hash } },
+    create: {
+      workspaceId, pageId: page.id, templateId: template.id,
+      contentHash: hash, content: template.content, parameterKeys: keys,
+      language: LIBRARY_LANGUAGE, metaTemplateName: cloneName, status: "CREATING",
+    },
+    update: {},
+  });
+  const wasNew = row.status === "CREATING" && !row.metaTemplateId;
+
+  const current = await refreshRegistration(row, token, page.pageId, { allowButtons: true });
+  if (current.status !== "MISSING") return { registration: current, created: false };
+
+  // Claim creation; a concurrent provisioner or lost response is reconciled by name.
+  const claim = await prisma.utilityTemplateRegistration.updateMany({
+    where: { id: row.id, status: "MISSING" },
+    data: { status: "CREATING" },
+  });
+  if (!claim.count) throw new Error("Provisioning already in progress; refresh shortly");
+
+  const result = await cloneLibraryTemplate(token, page.pageId, cloneName, libraryName, LIBRARY_LANGUAGE);
+  const registration = await prisma.utilityTemplateRegistration.update({
+    where: { id: row.id },
+    data: {
+      metaTemplateId: result.metaTemplateId,
+      status: result.status,
+      lastError: result.error || null,
+      lastCheckedAt: new Date(),
+    },
+  });
+  return { registration, created: wasNew || result.status === "APPROVED" };
+}
+
+export interface ProvisionSummary {
+  provisioned: number;
+  skipped: number;
+  failed: Array<{ template: string; error: string }>;
+}
+
+/**
+ * Provision all active library utility templates to a Page.
+ * Never throws for per-template failures — they are collected in the summary.
+ * Throws only when the Page itself is missing/inaccessible (caller decides).
+ */
+export async function provisionLibraryTemplates(workspaceId: string, pageId: string): Promise<ProvisionSummary> {
+  const page = await prisma.facebookPage.findFirst({ where: { id: pageId, workspaceId } });
+  if (!page) throw new Error("Page not found");
+  let token: string;
+  try {
+    token = await verifyPageGrant(page);
+  } catch (error) {
+    // Grant missing/expired: provisioning is impossible until the customer reconnects.
+    // Not a failure of provisioning itself — the page stays active for standard inbox.
+    throw new Error(error instanceof Error ? error.message : "Page grant verification failed");
+  }
+  const catalog = await prisma.globalTemplate.findMany({
+    where: { isActive: true, status: "active", isUtility: true, libraryTemplateName: { not: null } },
+    orderBy: { name: "asc" },
+  });
+  const summary: ProvisionSummary = { provisioned: 0, skipped: 0, failed: [] };
+  for (const tpl of catalog) {
+    try {
+      const { created } = await provisionLibraryTemplate(workspaceId, page, tpl, token);
+      if (created) summary.provisioned++; else summary.skipped++;
+    } catch (error) {
+      summary.failed.push({ template: tpl.name, error: error instanceof Error ? error.message : "Provisioning failed" });
+      // Record the failure on the registration row for admin visibility/retry.
+      try {
+        await prisma.utilityTemplateRegistration.updateMany({
+          where: { pageId: page.id, templateId: tpl.id, contentHash: libraryContentHash(tpl.libraryTemplateName!) },
+          data: { status: "ERROR", lastError: error instanceof Error ? error.message : "Provisioning failed", lastCheckedAt: new Date() },
+        });
+      } catch { /* best effort */ }
+    }
+  }
+  return summary;
 }
