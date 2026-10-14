@@ -28,7 +28,8 @@ if (env !== "preview") {
 const NEW_MIGRATIONS = new Set([
   "20261007090000_utility_messaging",
   "20261007090001_contact_page_scope",
-  "20261013_add_data_deletion_request",
+  "20261014103312_restore_contact_workspace_user_unique",
+  "20261014120000_add_library_template_name",
 ]);
 
 function run(cmd) {
