@@ -56,7 +56,21 @@ function dbHost() {
 
 console.log(`[migrate-preview] target DB host: ${dbHost()}`);
 console.log("[migrate-preview] running `prisma migrate deploy`");
-let r = run("npx prisma migrate deploy");
+
+// Retry on P1002 (Neon auto-pause: first connection wakes the DB, which can
+// take 5-10s and cause Prisma's initial connection to time out).
+let r = { ok: false, output: "" };
+for (let attempt = 1; attempt <= 3; attempt++) {
+  r = run("npx prisma migrate deploy");
+  if (r.ok) break;
+  const isP1002 = r.output.includes("P1002") || r.output.includes("Can't reach database server");
+  if (isP1002 && attempt < 3) {
+    console.log(`[migrate-preview] P1002 on attempt ${attempt} — waiting 15s for DB wake, retrying...`);
+    await new Promise(res => setTimeout(res, 15000));
+    continue;
+  }
+  break;
+}
 
 if (!r.ok && (r.output.includes("P3005") || r.output.includes("not empty"))) {
   console.log("[migrate-preview] P3005 detected — baselining pre-existing migrations");
