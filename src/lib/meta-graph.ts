@@ -1,80 +1,95 @@
-const GRAPH = "https://graph.facebook.com/v19.0";
-
-// Meta error code constants
+import { utilityPayload, templateKeys } from "@/lib/messaging-policy";
+export const GRAPH = "https://graph.facebook.com/v26.0";
 export const META_ERR_TOKEN_EXPIRED = 190;
 export const META_ERR_WINDOW_EXPIRED = 1545041;
 export const META_ERR_RATE_LIMIT = 613;
-
 export interface SendResult {
-  messageId: string | null;
-  error: string | null;
-  errorCode: number | null;
+  messageId: string | null; error: string | null; errorCode: number | null;
+  errorSubcode?: number; httpStatus?: number; retryable?: boolean; uncertain?: boolean;
+}
+export async function graphRequest(token: string, path: string, init: RequestInit = {}) {
+  const res = await fetch(GRAPH + path, { ...init, headers: { Authorization: "Bearer " + token, "Content-Type": "application/json", ...init.headers }, signal: AbortSignal.timeout(15000), cache: "no-store" });
+  const data = await res.json();
+  if (!res.ok || data.error) throw new Error(data.error?.message || "Meta HTTP " + res.status);
+  return data;
+}
+export async function sendPayload(token: string, pageId: string, payload: unknown): Promise<SendResult> {
+  try {
+    const res = await fetch(GRAPH + "/" + pageId + "/messages", { method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(15000) });
+    let data;
+    try { data = await res.json(); } catch { return { messageId: null, error: "Unparseable Meta response; outcome unknown", errorCode: null, uncertain: true, httpStatus: res.status }; }
+    if (data.error || !res.ok) return { messageId: null, error: data.error?.message || "Meta HTTP " + res.status, errorCode: data.error?.code ?? null, errorSubcode: data.error?.error_subcode, httpStatus: res.status,
+      retryable: !!data.error && (data.error.is_transient === true || [4, 17, 32, 613].includes(data.error.code) || res.status === 429), uncertain: !data.error };
+    if (!data.message_id) return { messageId: null, error: "Meta omitted message_id; outcome unknown", errorCode: null, uncertain: true };
+    return { messageId: data.message_id, error: null, errorCode: null };
+  } catch { return { messageId: null, error: "Transport failed; outcome unknown (do not automatically resend)", errorCode: null, uncertain: true }; }
+}
+export async function sendMessengerMessage(token: string, pageId: string, psid: string, text: string) {
+  return sendPayload(token, pageId, { recipient: { id: psid }, messaging_type: "RESPONSE", message: { text } });
+}
+export async function sendUtilityMessage(token: string, pageId: string, psid: string, name: string, values: Record<string, string>, language = "en") {
+  return sendPayload(token, pageId, utilityPayload(psid, name, values, language));
+}
+export interface UtilityTemplateField { key: string; example: string }
+export interface CreateUtilityTemplateResult { metaTemplateId?: string; metaTemplateName: string; status: string; error?: string }
+export async function createMetaUtilityTemplate(token: string, pageId: string, name: string, content: string, fields: UtilityTemplateField[], language = "en"): Promise<CreateUtilityTemplateResult> {
+  try {
+    const keys = templateKeys(content);
+    const examples = keys.map(key => { const example = fields.find(f => f.key === key)?.example; if (!example?.trim()) throw new Error("Missing review example: " + key); return { param_name: key, example }; });
+    const data = await graphRequest(token, "/" + pageId + "/message_templates", { method: "POST", body: JSON.stringify({ name, language, category: "UTILITY", parameter_format: "NAMED", components: [{ type: "BODY", text: content, ...(examples.length ? { example: { body_text_named_params: examples } } : {}) }] }) });
+    if (!data.id) throw new Error("Meta did not return a template ID; refresh before retrying registration");
+    return { metaTemplateId: String(data.id), metaTemplateName: name, status: data.status || "PENDING" };
+  } catch (error) { return { metaTemplateName: name, status: "ERROR", error: error instanceof Error ? error.message : "Registration failed" }; }
 }
 
-// Valid MESSAGE_TAG values for out-of-window utility messaging.
-// Content MUST match the selected tag — misuse violates Meta policy.
-export const MESSAGE_TAGS = {
-  CONFIRMED_EVENT_UPDATE: "CONFIRMED_EVENT_UPDATE",
-  POST_PURCHASE_UPDATE:   "POST_PURCHASE_UPDATE",
-  ACCOUNT_UPDATE:         "ACCOUNT_UPDATE",
-} as const;
-export type MessageTag = typeof MESSAGE_TAGS[keyof typeof MESSAGE_TAGS];
+// ── Meta template library (pre-approved) ─────────────────────────────────────
+// Library templates use positional parameters ({{1}}, {{2}}). Cloning one to a
+// Page returns APPROVED immediately — no Meta review. Custom templates created
+// via createMetaUtilityTemplate above go through review instead.
+
+export interface LibraryTemplate {
+  name: string;
+  language: string;
+  category: string;
+  topic?: string;
+  usecase?: string;
+  industry?: string[];
+  body: string;
+  body_params?: string[];
+  body_param_types?: string[];
+  buttons?: Array<{ type: string; text: string; url?: string }>;
+  id?: string;
+}
+
+/** Browse Meta's pre-approved utility template library. */
+export async function searchLibraryTemplates(token: string, query = "", language = "en"): Promise<LibraryTemplate[]> {
+  const params = new URLSearchParams({ language });
+  if (query.trim()) params.set("name_or_content", query.trim());
+  const data = await graphRequest(token, `/message_template_library?${params.toString()}`);
+  return ((data.data ?? []) as LibraryTemplate[]).filter(t => t.category === "UTILITY");
+}
+
+export interface CloneLibraryTemplateResult { metaTemplateId?: string; metaTemplateName: string; status: string; error?: string }
 
 /**
- * Send a text message from a Facebook Page to a user via Messenger.
- *
- * messagingType "RESPONSE" — standard reply, requires contact to have sent a
- *   message to the Page within the last 24 hours.
- *
- * messagingType "MESSAGE_TAG" — out-of-window utility notification. Requires a
- *   `tag` value. Content must strictly match the tag:
- *   - CONFIRMED_EVENT_UPDATE: event reminders / updates for registered events
- *   - POST_PURCHASE_UPDATE:   receipt or order status for an actual purchase
- *   - ACCOUNT_UPDATE:         non-recurring account or service notification
- *
- * Token must already be decrypted before passing here.
+ * Clone a Meta pre-approved library template to a Page's template library.
+ * Returns APPROVED immediately (no review) for library content.
+ * Idempotent by convention: callers must use a deterministic cloneName and
+ * check for an existing template with that name before calling.
  */
-export async function sendMessengerMessage(
-  pageAccessToken: string,
-  metaPageId: string,
-  recipientPsid: string,
-  text: string,
-  messagingType: "RESPONSE" | "MESSAGE_TAG" = "RESPONSE",
-  tag?: MessageTag,
-): Promise<SendResult> {
-  let res: Response;
+export async function cloneLibraryTemplate(
+  token: string, pageId: string, cloneName: string, libraryTemplateName: string, language = "en_US",
+): Promise<CloneLibraryTemplateResult> {
   try {
-    res = await fetch(
-      `${GRAPH}/${metaPageId}/messages?access_token=${pageAccessToken}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          recipient: { id: recipientPsid },
-          messaging_type: messagingType,
-          ...(messagingType === "MESSAGE_TAG" && tag && { tag }),
-          message: { text },
-        }),
-      },
-    );
-  } catch (err) {
-    return { messageId: null, error: String(err), errorCode: null };
-  }
-
-  const data = await res.json() as {
-    message_id?: string;
-    error?: { message: string; code: number };
-  };
-
-  if (!res.ok || data.error) {
-    return {
-      messageId: null,
-      error: data.error?.message ?? `HTTP ${res.status}`,
-      errorCode: data.error?.code ?? null,
-    };
-  }
-
-  return { messageId: data.message_id ?? null, error: null, errorCode: null };
+    if (!/^[a-z0-9_]+$/.test(cloneName)) throw new Error("Invalid clone name: " + cloneName);
+    if (!/^[a-z0-9_]+$/.test(libraryTemplateName)) throw new Error("Invalid library template name: " + libraryTemplateName);
+    const data = await graphRequest(token, "/" + pageId + "/message_templates", {
+      method: "POST",
+      body: JSON.stringify({ name: cloneName, category: "UTILITY", language, library_template_name: libraryTemplateName }),
+    });
+    if (!data.id) throw new Error("Meta did not return a template ID for the clone; check for an existing template with this name");
+    return { metaTemplateId: String(data.id), metaTemplateName: cloneName, status: data.status || "APPROVED" };
+  } catch (error) { return { metaTemplateName: cloneName, status: "ERROR", error: error instanceof Error ? error.message : "Clone failed" }; }
 }
 
 // ── Conversation scan ─────────────────────────────────────────────────────────
@@ -199,6 +214,7 @@ export async function subscribePageToWebhook(
     "messaging_optouts",
     "message_deliveries",
     "message_reads",
+    "message_template_status_update",
   ].join(",");
 
   let res: Response;

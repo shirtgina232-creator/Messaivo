@@ -1,18 +1,8 @@
+import { approvedRegistration } from "@/lib/utility-registration";
+import { selectRecipients } from "@/lib/broadcast-policy";
+import { parseFieldValues, recipientEligibility, resolveMessage } from "@/lib/messaging-policy";
 import { prisma } from "@/lib/db";
 import { getWorkspace, unauthorized, badRequest, serverError, ok, created } from "@/lib/api-helpers";
-
-interface TemplateField {
-  key: string;
-  label: string;
-  type: "TEXT" | "NUMBER" | "URL" | "DATE" | "CURRENCY" | "TEXTAREA" | "DROPDOWN";
-  required: boolean;
-  maxLength?: number;
-  options?: string[];
-}
-
-function renderTemplate(content: string, values: Record<string, string>): string {
-  return content.replace(/\{\{(\w+)\}\}/g, (_, key) => values[key] ?? "");
-}
 
 export async function GET(req: Request) {
   try {
@@ -47,167 +37,41 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  const ws = await getWorkspace(); if (!ws) return unauthorized();
   try {
-    const ws = await getWorkspace();
-    if (!ws) return unauthorized();
-
-    let body: unknown;
-    try {
-      body = await req.json();
-    } catch {
-      return badRequest("Invalid JSON body");
+    const input = await req.json();
+    const { name, pageId, templateId, messageTemplateId, messagingType } = input;
+    if (typeof name !== "string" || !name.trim() || typeof pageId !== "string") return badRequest("Name and Page are required");
+    const page = await prisma.facebookPage.findFirst({ where: { id: pageId, workspaceId: ws.id, isActive: true } });
+    if (!page) return badRequest("Active Page not found");
+    const utility = messagingType === "utility" || messagingType === "UTILITY";
+    if (utility && (typeof templateId !== "string" || messageTemplateId)) return badRequest("Utility requires a registered catalog template");
+    const values = parseFieldValues(input.fieldValues);
+    let content = typeof input.message === "string" ? input.message : "";
+    let title: string | null = null;
+    let registration: Awaited<ReturnType<typeof approvedRegistration>>["registration"] | null = null;
+    if (templateId) {
+      const tpl = await prisma.globalTemplate.findFirst({ where: { id: templateId, isActive: true, status: "active" } });
+      if (!tpl) return badRequest("Active template not found");
+      content = tpl.content; title = tpl.name;
+      if (utility) registration = (await approvedRegistration(ws.id, pageId, templateId)).registration;
+    } else if (messageTemplateId) {
+      const tpl = await prisma.messageTemplate.findFirst({ where: { id: messageTemplateId, workspaceId: ws.id, status: "approved", OR: [{ pageId }, { pageId: null }] } });
+      if (!tpl) return badRequest("Approved workspace template not found");
+      content = tpl.content; title = tpl.name;
     }
-
-    const { name, message, pageId, templateId, messageTemplateId, customMessageContent, fieldValues, scheduledAt, contactIds, groupIds, allPageContacts, allowSubscriberSend, messagingTag } = body as Record<string, unknown>;
-
-    // Validate messagingTag if provided
-    const VALID_TAGS = new Set(["CONFIRMED_EVENT_UPDATE", "POST_PURCHASE_UPDATE", "ACCOUNT_UPDATE"]);
-    const resolvedMessagingTag = typeof messagingTag === "string" && VALID_TAGS.has(messagingTag) ? messagingTag : null;
-
-    if (!name || typeof name !== "string" || !name.trim()) return badRequest("name is required");
-
-    // Validate page if provided
-    if (pageId) {
-      const page = await prisma.facebookPage.findFirst({
-        where: { id: pageId as string, workspaceId: ws.id },
-        select: { id: true },
-      });
-      if (!page) return badRequest("Invalid pageId");
-    }
-
-    let finalMessage: string;
-    let resolvedTemplateName: string | null = null;
-    let resolvedFieldValues: Record<string, string> | null = null;
-    let resolvedTemplateId: string | null = null;
-    let resolvedMessageTemplateId: string | null = null;
-
-    if (messageTemplateId && typeof messageTemplateId === "string") {
-      // User-template path: store raw content; render per-recipient at send time.
-      // customMessageContent allows the user to edit the template before sending —
-      // the edited content is stored as broadcast.message; per-recipient variable
-      // substitution still runs because messageTemplateId is set.
-      const tpl = await prisma.messageTemplate.findFirst({
-        where: { id: messageTemplateId, workspaceId: ws.id },
-        select: { id: true, name: true, content: true, fields: true },
-      });
-      if (!tpl) return badRequest("Template not found");
-
-      // Use the user-edited content when provided, otherwise fall back to template content
-      const rawContent = (typeof customMessageContent === "string" && customMessageContent.trim())
-        ? customMessageContent.trim()
-        : tpl.content;
-
-      // Store raw template — NOT pre-rendered; contact vars resolved per-recipient at send time
-      finalMessage = rawContent;
-      resolvedTemplateName = tpl.name;
-      resolvedFieldValues = {};
-      resolvedMessageTemplateId = tpl.id;
-
-      // Increment usage count
-      await prisma.messageTemplate.update({
-        where: { id: tpl.id },
-        data: { usageCount: { increment: 1 } },
-      });
-
-    } else if (templateId && typeof templateId === "string") {
-      // GlobalTemplate path — unchanged behavior: pre-render message from field values
-      const tpl = await prisma.globalTemplate.findUnique({
-        where: { id: templateId },
-        select: { id: true, name: true, content: true, fields: true, isActive: true },
-      });
-
-      if (!tpl) return badRequest("Template not found");
-      if (!tpl.isActive) return badRequest("Template is no longer active");
-
-      const fields = ((tpl.fields ?? []) as unknown) as TemplateField[];
-      const values = (typeof fieldValues === "object" && fieldValues !== null && !Array.isArray(fieldValues))
-        ? fieldValues as Record<string, string>
-        : {};
-
-      // Validate all required fields
-      for (const field of fields) {
-        const val = (values[field.key] ?? "").trim();
-        if (field.required && !val) {
-          return badRequest(`Field "${field.label}" is required`);
-        }
-        if (val && field.type === "URL") {
-          try { new URL(val); } catch { return badRequest(`Field "${field.label}" must be a valid URL (include https://)`); }
-        }
-        if (val && (field.type === "NUMBER" || field.type === "CURRENCY") && isNaN(Number(val))) {
-          return badRequest(`Field "${field.label}" must be a number`);
-        }
-        if (val && field.maxLength && val.length > field.maxLength) {
-          return badRequest(`Field "${field.label}" exceeds maximum length of ${field.maxLength} characters`);
-        }
-      }
-
-      finalMessage = renderTemplate(tpl.content, values as Record<string, string>);
-      resolvedTemplateName = tpl.name;
-      resolvedFieldValues = values as Record<string, string>;
-      resolvedTemplateId = tpl.id;
-
-    } else if (message && typeof message === "string" && message.trim()) {
-      // Legacy direct-message path (backward compatibility)
-      finalMessage = message.trim();
-    } else {
-      return badRequest("Either messageTemplateId, templateId, or message is required");
-    }
-
-    // Resolve recipient contact IDs — all page contacts, specific groups, or explicit list
-    const validContactIds: string[] = [];
-    if (allPageContacts === true && typeof pageId === "string") {
-      const pageContacts = await prisma.contact.findMany({
-        where: { pageId: pageId as string, workspaceId: ws.id },
-        select: { id: true },
-      });
-      pageContacts.forEach(c => validContactIds.push(c.id));
-    } else if (Array.isArray(groupIds) && groupIds.length > 0) {
-      const validGroupIds = (groupIds as unknown[]).filter((x): x is string => typeof x === "string");
-      if (validGroupIds.length > 0) {
-        const members = await prisma.contactGroupMember.findMany({
-          where: { groupId: { in: validGroupIds }, contact: { workspaceId: ws.id } },
-          select: { contactId: true },
-        });
-        const uniqueIds = [...new Set(members.map(m => m.contactId))];
-        uniqueIds.forEach(id => validContactIds.push(id));
-      }
-    } else if (Array.isArray(contactIds) && contactIds.length > 0) {
-      const ids = (contactIds as unknown[]).filter((x): x is string => typeof x === "string");
-      if (ids.length > 0) {
-        const found = await prisma.contact.findMany({
-          where: { id: { in: ids }, workspaceId: ws.id },
-          select: { id: true },
-        });
-        found.forEach(c => validContactIds.push(c.id));
-      }
-    }
-
-    const broadcast = await prisma.broadcast.create({
-      data: {
-        workspaceId: ws.id,
-        name: name.trim(),
-        message: finalMessage,
-        pageId: typeof pageId === "string" ? pageId : null,
-        templateId: resolvedTemplateId,
-        messageTemplateId: resolvedMessageTemplateId,
-        templateName: resolvedTemplateName,
-        fieldValues: resolvedFieldValues ?? undefined,
-        scheduledAt: typeof scheduledAt === "string" ? new Date(scheduledAt) : null,
-        allowSubscriberSend: allowSubscriberSend === true && !!resolvedMessagingTag,
-        messagingTag: resolvedMessagingTag,
-        status: "draft",
-        totalRecipients: validContactIds.length,
-        recipients: validContactIds.length > 0 ? {
-          createMany: {
-            data: validContactIds.map(contactId => ({ contactId, status: "pending" })),
-          },
-        } : undefined,
-      },
-    });
-
-    return created({ broadcast });
-  } catch (e) {
-    console.error("[POST /api/broadcasts]", e);
-    return serverError();
-  }
+    if (!content.trim()) return badRequest("Message content is required");
+    const scheduledAt = input.scheduledAt ? new Date(input.scheduledAt) : null;
+    if (scheduledAt && (!Number.isFinite(scheduledAt.getTime()) || scheduledAt <= new Date())) return badRequest("Schedule must be a valid future date");
+    const contacts = await selectRecipients(ws.id, pageId, input);
+    const eligible = contacts.filter(c => !recipientEligibility(c, ws.id, pageId, utility));
+    for (const contact of eligible) resolveMessage(content, values, contact, page.pageName);
+    const broadcast = await prisma.broadcast.create({ data: {
+      workspaceId: ws.id, name: name.trim(), pageId, templateId: templateId || null, messageTemplateId: messageTemplateId || null,
+      message: content, templateName: title, fieldValues: values, scheduledAt, messagingType: utility ? "UTILITY" : null,
+      utilityRegistrationId: registration?.id, metaTemplateName: registration?.metaTemplateName,
+      totalRecipients: eligible.length, recipients: { createMany: { data: eligible.map(c => ({ contactId: c.id })) } },
+    } });
+    return created({ broadcast, excluded: contacts.length - eligible.length });
+  } catch (error) { return badRequest(error instanceof Error ? error.message : "Invalid broadcast"); }
 }

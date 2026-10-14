@@ -1,107 +1,26 @@
 import { prisma } from "@/lib/db";
-import { getWorkspace, unauthorized, notFound, badRequest, serverError, ok } from "@/lib/api-helpers";
-import { decryptToken } from "@/lib/token-crypto";
-import { sendMessengerMessage } from "@/lib/meta-graph";
-
-const MAX_TEST_RECIPIENTS = 5;
-
-export async function POST(
-  req: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
+import { getWorkspace, unauthorized, badRequest, notFound, ok } from "@/lib/api-helpers";
+import { prepareBroadcast } from "@/lib/broadcast-policy";
+import { deliverRecipient } from "@/lib/broadcast-delivery";
+export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const ws = await getWorkspace(); if (!ws) return unauthorized();
   try {
-    const ws = await getWorkspace();
-    if (!ws) return unauthorized();
-
     const { id } = await params;
-
-    const broadcast = await prisma.broadcast.findFirst({
-      where: { id, workspaceId: ws.id },
-      select: { id: true, status: true, pageId: true, message: true, messageTemplateId: true, fieldValues: true },
-    });
-    if (!broadcast) return notFound("Broadcast not found");
-
-    if (broadcast.status !== "draft" && broadcast.status !== "scheduled") {
-      return badRequest(`Cannot test-send a broadcast with status "${broadcast.status}"`);
-    }
-    if (!broadcast.pageId) return badRequest("Broadcast has no associated Facebook Page");
-
-    let body: unknown;
-    try { body = await req.json(); } catch { return badRequest("Invalid JSON body"); }
-
-    const { contactIds } = body as Record<string, unknown>;
-    if (!Array.isArray(contactIds) || contactIds.length === 0) {
-      return badRequest("Provide contactIds array (1–5 contacts)");
-    }
-    if (contactIds.length > MAX_TEST_RECIPIENTS) {
-      return badRequest(`Test send is limited to ${MAX_TEST_RECIPIENTS} recipients`);
-    }
-
-    const ids = (contactIds as unknown[]).filter((x): x is string => typeof x === "string");
-
-    // Verify contacts belong to this workspace
-    const contacts = await prisma.contact.findMany({
-      where: { id: { in: ids }, workspaceId: ws.id },
-      select: { id: true, name: true, firstName: true, lastName: true, metaUserId: true, isSubscribed: true, lastMessageAt: true },
-    });
-    if (contacts.length === 0) return badRequest("No valid contacts found");
-
-    const page = await prisma.facebookPage.findFirst({
-      where: { id: broadcast.pageId, workspaceId: ws.id },
-      select: { pageId: true, pageName: true, accessToken: true, isActive: true },
-    });
-    if (!page) return badRequest("Associated Facebook Page not found");
-    if (!page.isActive) return badRequest("The Facebook Page is not active");
-
-    const plainToken = decryptToken(page.accessToken);
-
-    const isUserTemplate = !!broadcast.messageTemplateId;
-    const rawTemplate = isUserTemplate ? broadcast.message : null;
-    const customFieldValues = (broadcast.fieldValues ?? {}) as Record<string, string>;
-
-    // Send to each test contact — no DB state changes, no credit deduction
-    const results: Array<{ contactId: string; name: string; success: boolean; error: string | null }> = [];
-    const windowCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
-
+    const broadcast = await prisma.broadcast.findFirst({ where: { id, workspaceId: ws.id } });
+    if (!broadcast) return notFound();
+    if (!["draft", "scheduled"].includes(broadcast.status)) return badRequest("Test Send requires a draft");
+    const key = req.headers.get("idempotency-key");
+    if (!key || !/^[a-zA-Z0-9_-]{16,100}$/.test(key)) return badRequest("A unique Idempotency-Key header is required");
+    const { contactIds } = await req.json();
+    if (!Array.isArray(contactIds) || contactIds.length < 1 || contactIds.length > 5 || contactIds.some(x => typeof x !== "string")) return badRequest("Choose 1–5 contacts");
+    const contacts = await prisma.contact.findMany({ where: { id: { in: contactIds }, workspaceId: ws.id, pageId: broadcast.pageId } });
+    if (contacts.length !== new Set(contactIds).size) return badRequest("Selection contains unavailable or wrong-Page contacts");
+    const prepared = await prepareBroadcast(broadcast);
+    const results = [];
     for (const contact of contacts) {
-      const displayName = contact.name ?? contact.firstName ?? contact.id;
-      if (!contact.isSubscribed) {
-        results.push({ contactId: contact.id, name: displayName, success: false, error: "Contact is unsubscribed" });
-        continue;
-      }
-      if (!contact.lastMessageAt || contact.lastMessageAt < windowCutoff) {
-        results.push({ contactId: contact.id, name: displayName, success: false, error: "Outside 24-hour messaging window — this contact must send a message to the Page before you can reach them." });
-        continue;
-      }
-
-      // Per-recipient rendering for user-template broadcasts
-      let messageToSend = broadcast.message;
-      if (isUserTemplate && rawTemplate) {
-        const contactVars: Record<string, string> = {
-          first_name: contact.firstName ?? contact.name?.split(" ")[0] ?? "",
-          last_name: contact.lastName ?? (contact.name?.split(" ").slice(1).join(" ") ?? ""),
-          name: contact.name ?? [contact.firstName, contact.lastName].filter(Boolean).join(" ") ?? "",
-          page_name: page.pageName,
-        };
-        const allVars = { ...customFieldValues, ...contactVars };
-        messageToSend = rawTemplate.replace(/\{\{(\w+)\}\}/g, (_, key) => allVars[key] ?? "");
-      }
-
-      const result = await sendMessengerMessage(plainToken, page.pageId, contact.metaUserId, messageToSend);
-      results.push({
-        contactId: contact.id,
-        name: displayName,
-        success: !result.error,
-        error: result.error,
-      });
+      try { results.push({ contactId: contact.id, name: contact.name, ...await deliverRecipient(broadcast, contact, prepared, "test:" + id + ":" + key + ":" + contact.id) }); }
+      catch (error) { results.push({ contactId: contact.id, name: contact.name, success: false, error: error instanceof Error ? error.message : "Test failed" }); }
     }
-
-    const sent = results.filter(r => r.success).length;
-    const failed = results.filter(r => !r.success).length;
-
-    return ok({ results, sent, failed, total: results.length });
-  } catch (e) {
-    console.error("[POST /api/broadcasts/[id]/test]", e);
-    return serverError();
-  }
+    return ok({ results, sent: results.filter(r => r.success).length, failed: results.filter(r => !r.success).length, total: results.length });
+  } catch (error) { return badRequest(error instanceof Error ? error.message : "Test failed"); }
 }

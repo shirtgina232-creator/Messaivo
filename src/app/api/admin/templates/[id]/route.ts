@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { requireAdminOrError, logAdminAction } from "@/lib/admin-helpers";
+import { requireAdminOrError, requireSuperAdminOrError, logAdminAction } from "@/lib/admin-helpers";
 import { ok, created, notFound, serverError, badRequest } from "@/lib/api-helpers";
 
 const VALID_STATUSES = new Set(["draft", "active", "inactive"]);
@@ -20,7 +20,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 }
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const [admin, err] = await requireAdminOrError();
+  // Template edits are Super Admin only.
+  const [admin, err] = await requireSuperAdminOrError();
   if (err) return err;
   try {
     const { id } = await params;
@@ -42,6 +43,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       updateData.status = data.status;
       updateData.isActive = data.status === "active";
     }
+    if (typeof data.isUtility === "boolean") updateData.isUtility = data.isUtility;
 
     const template = await prisma.globalTemplate.update({ where: { id }, data: updateData });
     await logAdminAction(admin.id, "UPDATE_GLOBAL_TEMPLATE", id, "GlobalTemplate", { name: template.name, status: template.status });
@@ -53,7 +55,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 }
 
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const [admin, err] = await requireAdminOrError();
+  // Template deletion is Super Admin only.
+  const [admin, err] = await requireSuperAdminOrError();
   if (err) return err;
   try {
     const { id } = await params;

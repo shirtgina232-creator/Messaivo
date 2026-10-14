@@ -1,3 +1,4 @@
+import { verifyPageGrant, provisionLibraryTemplates } from "@/lib/utility-registration";
 import { prisma } from "@/lib/db";
 import {
   getWorkspace, unauthorized, notFound, badRequest, serverError, ok, noContent,
@@ -101,6 +102,20 @@ export async function PATCH(
       }
     }
 
+    if (isActive === true) {
+      const full = await prisma.facebookPage.findUniqueOrThrow({ where: { id } });
+      try { await verifyPageGrant(full); } catch { /* Saved permissionError is returned to the user; standard inbox remains usable. */ }
+      // Auto-provision library utility templates. Non-fatal: a failure here must
+      // never break page activation; the admin backfill covers any gaps.
+      try {
+        const summary = await provisionLibraryTemplates(ws.id, id);
+        if (summary.failed.length) {
+          console.warn(`[pages/[id]] Provisioned ${summary.provisioned}, skipped ${summary.skipped}, failed ${summary.failed.length} for page ${existing.pageId}`);
+        }
+      } catch (err) {
+        console.warn("[pages/[id]] Library auto-provisioning skipped:", err instanceof Error ? err.message : err);
+      }
+    }
     // Return page without accessToken
     const { accessToken: _omit, ...pageForClient } = updated;
     return ok({ page: pageForClient });
@@ -125,7 +140,7 @@ export async function DELETE(
     });
     if (!existing) return notFound("Page not found");
 
-    await prisma.facebookPage.delete({ where: { id } });
+    await prisma.facebookPage.update({ where: { id }, data: { isActive: false, utilityPermissionGranted: false } });
     return noContent();
   } catch (e) {
     console.error("[DELETE /api/pages/[id]]", e);

@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { requireAdminOrError, logAdminAction } from "@/lib/admin-helpers";
+import { requireAdminOrError, requireSuperAdminOrError, logAdminAction } from "@/lib/admin-helpers";
 import { ok, badRequest, serverError, created } from "@/lib/api-helpers";
 
 const VALID_STATUSES = new Set(["draft", "active", "inactive"]);
@@ -9,7 +9,15 @@ export async function GET() {
   const [, err] = await requireAdminOrError();
   if (err) return err;
   try {
-    const templates = await prisma.globalTemplate.findMany({ orderBy: { createdAt: "desc" } });
+    const templates = await prisma.globalTemplate.findMany({
+      orderBy: { createdAt: "desc" },
+      include: {
+        utilityRegistrations: {
+          select: { id: true, workspaceId: true, pageId: true, status: true, metaTemplateName: true, metaTemplateId: true, lastCheckedAt: true, lastError: true },
+          orderBy: { updatedAt: "desc" },
+        },
+      },
+    });
     return ok({ templates });
   } catch (e) {
     console.error("[GET /api/admin/templates]", e);
@@ -18,7 +26,8 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const [admin, err] = await requireAdminOrError();
+  // Template creation is Super Admin only — customers must never create templates.
+  const [admin, err] = await requireSuperAdminOrError();
   if (err) return err;
   try {
     let body: unknown;
@@ -39,6 +48,7 @@ export async function POST(req: Request) {
         category,
         status,
         isActive: status === "active",
+        isUtility: typeof data.isUtility === "boolean" ? data.isUtility : false,
         createdBy: admin.id,
       },
     });
