@@ -7,7 +7,10 @@ import LibraryManager from "./LibraryManager";
 
 type Tab = "library" | "custom";
 
-export default function AdminTemplatesTabs({ initialTemplates }: { initialTemplates: unknown[] }) {
+export default function AdminTemplatesTabs({ initialTemplates, initialCatalog }: {
+  initialTemplates: unknown[];
+  initialCatalog: unknown[];
+}) {
   const [tab, setTab] = useState<Tab>("library");
 
   return (
@@ -37,7 +40,7 @@ export default function AdminTemplatesTabs({ initialTemplates }: { initialTempla
       </div>
 
       {tab === "library" ? (
-        <LibraryManager />
+        <LibraryManager initialCatalog={initialCatalog as never} />
       ) : (
         <TemplatesManager initialTemplates={initialTemplates as never} />
       )}

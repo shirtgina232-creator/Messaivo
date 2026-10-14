@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { Search, Plus, Trash2, Loader2, Check, Zap, AlertTriangle, RefreshCw, BookOpen } from "lucide-react";
+import { useState } from "react";
+import { Search, Plus, Trash2, Loader2, Check, Zap, AlertTriangle, BookOpen } from "lucide-react";
 
 interface LibraryResult {
   name: string;
@@ -36,30 +36,25 @@ const inpStyle = {
 // Browse Meta's pre-approved library, add entries to the catalog. Provisioning
 // to Pages happens automatically on page activation + via the backfill below.
 
-export default function LibraryManager() {
+export default function LibraryManager({ initialCatalog }: { initialCatalog: CatalogTemplate[] }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<LibraryResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [searched, setSearched] = useState(false);
-  const [catalog, setCatalog] = useState<CatalogTemplate[]>([]);
-  const [loadingCatalog, setLoadingCatalog] = useState(true);
+  const [catalog, setCatalog] = useState<CatalogTemplate[]>(initialCatalog);
   const [adding, setAdding] = useState<string | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
   const [provisioning, setProvisioning] = useState(false);
   const [provisionResult, setProvisionResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const loadCatalog = useCallback(async () => {
-    setLoadingCatalog(true);
+  async function refreshCatalog() {
     try {
       const res = await fetch("/api/admin/templates");
       const data = await res.json() as { templates?: CatalogTemplate[] };
       setCatalog((data.templates ?? []).filter(t => t.libraryTemplateName));
     } catch { setError("Failed to load catalog"); }
-    finally { setLoadingCatalog(false); }
-  }, []);
-
-  useEffect(() => { loadCatalog(); }, [loadCatalog]);
+  }
 
   const inCatalog = (name: string) => catalog.some(c => c.libraryTemplateName === name && c.isActive);
 
@@ -91,7 +86,7 @@ export default function LibraryManager() {
       });
       const data = await res.json() as { template?: CatalogTemplate; error?: string; deduped?: boolean };
       if (!res.ok) throw new Error(data.error ?? "Failed to add to catalog");
-      await loadCatalog();
+      await refreshCatalog();
     } catch (err) { setError(err instanceof Error ? err.message : "Failed to add to catalog"); }
     finally { setAdding(null); }
   }
@@ -102,7 +97,7 @@ export default function LibraryManager() {
     try {
       const res = await fetch(`/api/admin/templates/library/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Failed to remove");
-      await loadCatalog();
+      await refreshCatalog();
     } catch (err) { setError(err instanceof Error ? err.message : "Failed to remove"); }
     finally { setRemoving(null); }
   }
@@ -162,11 +157,7 @@ export default function LibraryManager() {
         {provisionResult && (
           <p className="text-[12px] mb-3" style={{ color: "#10B981" }}>{provisionResult}</p>
         )}
-        {loadingCatalog ? (
-          <div className="flex items-center gap-2 text-[12px]" style={{ color: "#8B95A7" }}>
-            <Loader2 size={12} className="animate-spin" /> Loading catalog…
-          </div>
-        ) : catalog.length === 0 ? (
+        {catalog.length === 0 ? (
           <p className="text-[12.5px] px-4 py-6 rounded-xl text-center"
             style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", color: "#8B95A7" }}>
             No library templates curated yet. Search Meta&apos;s library below to add the first one.

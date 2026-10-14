@@ -4,6 +4,11 @@ import AdminTemplatesTabs from "./_components/AdminTemplatesTabs";
 export default async function AdminTemplatesPage() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const templates = (await prisma.globalTemplate.findMany({ orderBy: { createdAt: "desc" } })) as any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const catalog = (await prisma.globalTemplate.findMany({
+    where: { libraryTemplateName: { not: null }, isActive: true },
+    orderBy: { name: "asc" },
+  })) as any[];
   return (
     <div className="p-6 max-w-[1400px] mx-auto">
       <div className="mb-6">
@@ -13,7 +18,7 @@ export default async function AdminTemplatesPage() {
           <strong style={{ color: "#8B85FF" }}> Custom</strong> templates are Super Admin-only and require Meta review.
         </p>
       </div>
-      <AdminTemplatesTabs initialTemplates={templates} />
+      <AdminTemplatesTabs initialTemplates={templates} initialCatalog={catalog} />
     </div>
   );
 }
