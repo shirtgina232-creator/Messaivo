@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { prisma } from "@/lib/db";
 import { decryptToken } from "@/lib/token-crypto";
-import { sendMessengerMessage } from "@/lib/meta-graph";
+import { sendMessengerMessage, fetchUserProfile } from "@/lib/meta-graph";
 
 // ── Meta webhook payload types ─────────────────────────────────────────────────
 
@@ -25,7 +25,24 @@ type MetaMessagingEvent = {
   // Opt-outs can arrive as a keyword message ("STOP") or as an explicit optout event
   optin?: Record<string, unknown>;
 };
-type MetaEntry = { id: string; time: number; messaging: MetaMessagingEvent[] };
+
+type MetaTemplateStatusValue = {
+  message_template_id?: number | string;
+  message_template_name: string;
+  event: string; // "APPROVED" | "REJECTED" | "DISABLED" | "PAUSED"
+};
+
+type MetaChange = {
+  field: string;
+  value: unknown;
+};
+
+type MetaEntry = {
+  id: string;
+  time: number;
+  messaging?: MetaMessagingEvent[];
+  changes?: MetaChange[];
+};
 type MetaWebhookPayload = { object: string; entry: MetaEntry[] };
 
 // ── GET — Meta webhook subscription verification ───────────────────────────────
@@ -100,6 +117,13 @@ export async function POST(req: Request) {
         console.error("[Meta webhook] Unhandled error processing event:", err, "event:", JSON.stringify(event));
       }
     }
+    for (const change of entry.changes ?? []) {
+      try {
+        await handleChange(entry.id, change);
+      } catch (err) {
+        console.error("[Meta webhook] Unhandled error processing change:", err, "field:", change.field);
+      }
+    }
   }
 
   return new Response("OK", { status: 200 });
@@ -129,7 +153,7 @@ async function handleMessagingEvent(event: MetaMessagingEvent): Promise<void> {
 
     const page = await prisma.facebookPage.findFirst({
       where: { pageId: recipient.id, isActive: true },
-      select: { id: true, workspaceId: true },
+      select: { id: true, workspaceId: true, accessToken: true },
     });
     if (!page) {
       console.warn(`[Meta webhook] No active page found in DB for pageId=${recipient.id} — check isActive flag and that this page is connected`);
@@ -144,6 +168,7 @@ async function handleMessagingEvent(event: MetaMessagingEvent): Promise<void> {
       },
       update: {
         lastMessageAt: new Date(timestamp),
+        relationshipVerifiedAt: new Date(timestamp),
         totalMessages: { increment: 1 },
         isSubscribed: true, // any inbound message re-subscribes the contact
       },
@@ -152,11 +177,35 @@ async function handleMessagingEvent(event: MetaMessagingEvent): Promise<void> {
         pageId:       page.id,
         metaUserId:   sender.id,
         lastMessageAt: new Date(timestamp),
+        relationshipVerifiedAt: new Date(timestamp),
         totalMessages: 1,
         isSubscribed: true,
       },
     });
     console.log(`[Meta webhook] contact upserted: contactId=${contact.id}`);
+
+    // Populate name fields from Meta if not yet stored (fire-and-forget; never blocks the webhook response)
+    if (!contact.firstName && !contact.name) {
+      void (async () => {
+        try {
+          const token = decryptToken(page.accessToken);
+          const profile = await fetchUserProfile(token, sender.id);
+          if (profile.first_name || profile.last_name || profile.name) {
+            await prisma.contact.update({
+              where: { id: contact.id },
+              data: {
+                firstName: profile.first_name ?? undefined,
+                lastName: profile.last_name ?? undefined,
+                name: profile.name ?? undefined,
+              },
+            });
+            console.log(`[Meta webhook] contact name populated: contactId=${contact.id}`);
+          }
+        } catch (err) {
+          console.warn(`[Meta webhook] name fetch failed for contactId=${contact.id}:`, err);
+        }
+      })();
+    }
 
     // Upsert conversation — re-open and bump unread on new message
     const conversation = await prisma.conversation.upsert({
@@ -457,6 +506,61 @@ async function triggerAiAutoReply({
   });
 
   console.log(`[AI auto-reply] sent reply to ${metaUserId}: "${aiReply.slice(0, 60)}…"`);
+}
+
+// ── Template status update ────────────────────────────────────────────────────
+
+async function handleChange(metaPageId: string, change: MetaChange): Promise<void> {
+  if (change.field !== "message_template_status_update") return;
+
+  const value = change.value as MetaTemplateStatusValue;
+  const templateName = value?.message_template_name;
+  const event = value?.event;
+
+  if (!templateName || !event) {
+    console.warn("[Meta webhook] template_status_update: missing name or event in payload");
+    return;
+  }
+
+  const ALLOWED_STATUSES = new Set(["APPROVED", "REJECTED", "DISABLED", "PAUSED"]);
+  const status = event.toUpperCase();
+  if (!ALLOWED_STATUSES.has(status)) {
+    console.warn("[Meta webhook] template_status_update: unrecognised event", { event });
+    return;
+  }
+
+  const page = await prisma.facebookPage.findFirst({
+    where: { pageId: metaPageId },
+    select: { id: true },
+  });
+  if (!page) {
+    console.warn("[Meta webhook] template_status_update: no page found for metaPageId", { metaPageId });
+    return;
+  }
+
+  const metaIdStr = value.message_template_id ? String(value.message_template_id) : null;
+
+  const updateData = {
+    status,
+    lastCheckedAt: new Date(),
+    lastError:
+      status === "REJECTED" ? "Template rejected by Meta; review content and re-register"
+      : status === "DISABLED" ? "Template disabled by Meta"
+      : null,
+    ...(metaIdStr && { metaTemplateId: metaIdStr }),
+  };
+
+  const result = await prisma.utilityTemplateRegistration.updateMany({
+    where: { pageId: page.id, metaTemplateName: templateName },
+    data: updateData,
+  });
+
+  console.log("[Meta webhook] template_status_update processed", {
+    metaPageId,
+    templateName,
+    status,
+    rowsUpdated: result.count,
+  });
 }
 
 // ── Helper: find conversation from page ID and user PSID ──────────────────────

@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { Plus, Edit2, Trash2, X, ChevronDown, ChevronUp, Files, Check, AlertTriangle, Eye } from "lucide-react";
+import { useState, useMemo, useEffect } from "react";
+import { Plus, Edit2, Trash2, X, ChevronDown, ChevronUp, Files, Check, AlertTriangle, Eye, Zap, Loader2, RefreshCw } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -31,7 +31,37 @@ type GlobalTemplate = {
   createdBy: string | null;
   createdAt: Date;
   updatedAt: Date;
+  isUtility?: boolean;
+  metaTemplateName?: string | null;
+  metaTemplateStatus?: string | null;
+  registeredForPageId?: string | null;
+  utilityRegistrations?: RegistrationInfo[];
 };
+
+interface PageOption {
+  id: string;
+  pageName: string;
+  isActive: boolean;
+  utilityPermissionGranted: boolean;
+  permissionError: string | null;
+}
+
+interface WorkspaceOption {
+  id: string;
+  name: string;
+  pages: PageOption[];
+}
+
+interface RegistrationInfo {
+  id: string;
+  workspaceId: string;
+  pageId: string;
+  status: string;
+  metaTemplateName: string;
+  metaTemplateId: string | null;
+  lastCheckedAt: string | null;
+  lastError: string | null;
+}
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -54,7 +84,7 @@ const STATUS_META: Record<TemplateStatus, { label: string; color: string; bg: st
 
 const EMPTY_FORM = {
   name: "", description: "", content: "", fields: [] as TemplateField[],
-  category: ADMIN_CATEGORIES[0], status: "draft" as TemplateStatus,
+  category: ADMIN_CATEGORIES[0], status: "draft" as TemplateStatus, isUtility: false,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -254,6 +284,18 @@ function TemplateForm({ initial, onSave, onCancel, saving }: {
               : "Deactivated. Hidden from customers."}
           </p>
         </div>
+        <div className="flex flex-col gap-1.5">
+          <label className="block text-[11px] font-semibold uppercase tracking-wider" style={{ color: "#8B95A7" }}>Utility Messaging</label>
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input type="checkbox" checked={form.isUtility ?? false} onChange={e => set("isUtility", e.target.checked)} className="mt-0.5" />
+            <span className="text-[12px]" style={{ color: "#F5F7FA" }}>
+              Mark as utility template
+              <span className="block text-[10.5px] mt-0.5" style={{ color: "#8B95A7" }}>
+                Utility templates can be sent outside the 24-hour messaging window after Meta approval.
+              </span>
+            </span>
+          </label>
+        </div>
       </div>
 
       <FieldBuilder fields={form.fields} onChange={f => set("fields", f)} />
@@ -305,6 +347,363 @@ function TemplateForm({ initial, onSave, onCancel, saving }: {
   );
 }
 
+// ── Workspace → Page picker (Super Admin: register for a customer's Page) ─────
+// Lists customer workspaces and their connected Pages via the Super Admin-only
+// /api/admin/workspace-pages endpoint. Page access tokens are never exposed.
+
+function WorkspacePagePicker({ onSelect, compact }: {
+  onSelect: (workspaceId: string, pageId: string) => void;
+  compact?: boolean;
+}) {
+  const [workspaces, setWorkspaces] = useState<WorkspaceOption[]>([]);
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState("");
+  const [selectedPageId, setSelectedPageId] = useState("");
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setLoading(true); setError(null);
+      fetch(`/api/admin/workspace-pages?search=${encodeURIComponent(search)}&limit=20`)
+        .then(r => r.ok ? r.json() : Promise.reject(new Error("Failed to load workspaces")))
+        .then((d: { workspaces?: WorkspaceOption[] }) => {
+          const ws = d.workspaces ?? [];
+          setWorkspaces(ws);
+          // Keep selection if still present, else reset
+          const stillThere = ws.find(w => w.id === selectedWorkspaceId);
+          if (!stillThere) { setSelectedWorkspaceId(""); setSelectedPageId(""); onSelect("", ""); }
+        })
+        .catch((e: Error) => setError(e.message))
+        .finally(() => setLoading(false));
+    }, 300);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
+
+  const selectedWorkspace = workspaces.find(w => w.id === selectedWorkspaceId) ?? null;
+  const selectedPage = selectedWorkspace?.pages.find(p => p.id === selectedPageId) ?? null;
+
+  const inp = "w-full px-3 py-2 rounded-lg text-[13px] outline-none";
+  const inpStyle = { background: "#101722", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" };
+
+  return (
+    <div className={`flex flex-col ${compact ? "gap-2" : "gap-3"}`}>
+      <div>
+        <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: "#8B95A7" }}>
+          Customer workspace
+        </label>
+        <input
+          className={inp} style={inpStyle} placeholder="Search workspaces…"
+          value={search} onChange={e => setSearch(e.target.value)} />
+        {loading
+          ? <div className="flex items-center gap-2 py-2 text-[12px]" style={{ color: "#8B95A7" }}><Loader2 size={12} className="animate-spin" /> Loading…</div>
+          : error
+          ? <p className="text-[12px] py-1" style={{ color: "#EF4444" }}>{error}</p>
+          : <select
+              className={`${inp} mt-1.5`} style={inpStyle}
+              value={selectedWorkspaceId}
+              onChange={e => { setSelectedWorkspaceId(e.target.value); setSelectedPageId(""); onSelect(e.target.value, ""); }}>
+              <option value="">Select a workspace…</option>
+              {workspaces.map(w => (
+                <option key={w.id} value={w.id}>{w.name} ({w.pages.length} page{w.pages.length === 1 ? "" : "s"})</option>
+              ))}
+            </select>
+        }
+      </div>
+      {selectedWorkspace && (
+        <div>
+          <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: "#8B95A7" }}>
+            Facebook Page
+          </label>
+          {selectedWorkspace.pages.length === 0
+            ? <p className="text-[12px]" style={{ color: "#F59E0B" }}>This workspace has no active connected pages.</p>
+            : <select
+                className={inp} style={inpStyle}
+                value={selectedPageId}
+                onChange={e => { setSelectedPageId(e.target.value); onSelect(selectedWorkspaceId, e.target.value); }}>
+                <option value="">Select a page…</option>
+                {selectedWorkspace.pages.map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.pageName}{p.utilityPermissionGranted ? "" : " — grant missing"}
+                  </option>
+                ))}
+              </select>
+          }
+          {selectedPage && !selectedPage.utilityPermissionGranted && (
+            <p className="text-[11.5px] mt-1.5" style={{ color: "#F59E0B" }}>
+              This page is missing the <code>pages_utility_messaging</code> grant
+              {selectedPage.permissionError ? `: ${selectedPage.permissionError}` : ". The customer must reconnect the page first."}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Register with Meta Modal ──────────────────────────────────────────────────
+
+function RegisterMetaModal({ template, onCancel, onSuccess }: {
+  template: GlobalTemplate;
+  onCancel: () => void;
+  onSuccess: (reg: RegistrationInfo) => void;
+}) {
+  const [workspaceId, setWorkspaceId] = useState("");
+  const [selectedPageId, setSelectedPageId] = useState("");
+  const [registering, setRegistering] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleRegister() {
+    if (!workspaceId || !selectedPageId) return;
+    setRegistering(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/templates/${template.id}/register-meta`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId, pageId: selectedPageId }),
+      });
+      const data = await res.json() as { registration?: RegistrationInfo; error?: string };
+      if (!res.ok) { setError(data.error ?? "Registration failed"); return; }
+      onSuccess(data.registration!);
+    } catch { setError("Network error — please try again"); }
+    finally { setRegistering(false); }
+  }
+
+  const inp = "w-full px-3 py-2 rounded-lg text-[13px] outline-none";
+  const inpStyle = { background: "#101722", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onCancel} />
+      <div className="relative w-full max-w-md rounded-2xl p-6 flex flex-col gap-4"
+        style={{ background: "#0A111B", border: "1px solid rgba(108,99,255,0.3)" }}
+        onClick={e => e.stopPropagation()}>
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: "rgba(108,99,255,0.12)" }}>
+            <Zap size={18} style={{ color: "#8B85FF" }} />
+          </div>
+          <div>
+            <div className="text-[14px] font-semibold" style={{ color: "#F5F7FA" }}>Register Utility Template</div>
+            <div className="text-[11.5px] mt-0.5 truncate max-w-[260px]" style={{ color: "#8B95A7" }}>{template.name}</div>
+          </div>
+        </div>
+        <p className="text-[12px] leading-relaxed" style={{ color: "#8B95A7" }}>
+          This submits the template to Meta&apos;s <code className="px-1 rounded" style={{ background: "rgba(108,99,255,0.15)", color: "#8B85FF" }}>/message_templates</code> API
+          with <code className="px-1 rounded" style={{ background: "rgba(108,99,255,0.15)", color: "#8B85FF" }}>category: &quot;UTILITY&quot;</code>.
+          Meta typically auto-approves utility templates within seconds.
+        </p>
+        {template.utilityRegistrations?.some(r => r.status === "APPROVED") && (
+          <div className="flex items-center gap-2 p-2.5 rounded-lg text-[11.5px]"
+            style={{ background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.2)", color: "#10B981" }}>
+            <Check size={12} className="shrink-0" />
+            Already approved as <strong>{template.utilityRegistrations.find(r => r.status === "APPROVED")?.metaTemplateName}</strong>. Re-registering will create a new template name.
+          </div>
+        )}
+        <WorkspacePagePicker
+          onSelect={(wsId, pgId) => { setWorkspaceId(wsId); setSelectedPageId(pgId); }}
+        />
+        {error && (
+          <div className="flex items-start gap-2 p-2.5 rounded-lg text-[11.5px]"
+            style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", color: "#EF4444" }}>
+            <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+            {error}
+          </div>
+        )}
+        <div className="flex gap-2 justify-end">
+          <button className="text-[13px] font-medium px-4 py-2 rounded-lg"
+            style={{ color: "#8B95A7", background: "rgba(255,255,255,0.04)" }} onClick={onCancel}>
+            Cancel
+          </button>
+          <button
+            className="text-[13px] font-semibold px-4 py-2 rounded-lg text-white flex items-center gap-2 disabled:opacity-40"
+            style={{ background: "#6C63FF" }}
+            disabled={registering || !selectedPageId || !workspaceId}
+            onClick={handleRegister}>
+            {registering ? <><Loader2 size={13} className="animate-spin" /> Registering…</> : <><Zap size={13} /> Register with Meta</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Registration Panel (shown inline below the edit form) ─────────────────────
+
+function RegistrationPanel({ template, onUpdate }: {
+  template: GlobalTemplate;
+  onUpdate: (regs: RegistrationInfo[]) => void;
+}) {
+  const registrations = template.utilityRegistrations ?? [];
+  const [workspaceId, setWorkspaceId] = useState("");
+  const [selectedPageId, setSelectedPageId] = useState("");
+  const [registering, setRegistering] = useState(false);
+  const [refreshingId, setRefreshingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleRegister() {
+    if (!workspaceId || !selectedPageId) return;
+    setRegistering(true); setError(null);
+    try {
+      const res = await fetch(`/api/admin/templates/${template.id}/register-meta`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId, pageId: selectedPageId }),
+      });
+      const data = await res.json() as { registration?: RegistrationInfo; error?: string };
+      if (!res.ok) { setError(data.error ?? "Registration failed"); return; }
+      if (data.registration) {
+        onUpdate([...registrations.filter(r => r.id !== data.registration!.id), data.registration]);
+      }
+    } catch { setError("Network error — please try again"); }
+    finally { setRegistering(false); }
+  }
+
+  async function handleRefresh(reg: RegistrationInfo) {
+    setRefreshingId(reg.id); setError(null);
+    try {
+      const res = await fetch(`/api/admin/templates/${template.id}/refresh-registration`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId: reg.workspaceId, pageId: reg.pageId, registrationId: reg.id }),
+      });
+      const data = await res.json() as { registration?: RegistrationInfo; error?: string };
+      if (!res.ok) { setError(data.error ?? "Refresh failed"); return; }
+      if (data.registration) onUpdate(registrations.map(r => r.id === reg.id ? data.registration! : r));
+    } catch { setError("Network error — please try again"); }
+    finally { setRefreshingId(null); }
+  }
+
+  const sc: Record<string, { color: string; bg: string; border: string }> = {
+    APPROVED: { color: "#10B981", bg: "rgba(16,185,129,0.08)", border: "rgba(16,185,129,0.2)" },
+    PENDING:  { color: "#F59E0B", bg: "rgba(245,158,11,0.08)", border: "rgba(245,158,11,0.2)" },
+    CREATING: { color: "#F59E0B", bg: "rgba(245,158,11,0.08)", border: "rgba(245,158,11,0.2)" },
+    REJECTED: { color: "#EF4444", bg: "rgba(239,68,68,0.08)", border: "rgba(239,68,68,0.2)" },
+    DISABLED: { color: "#8B95A7", bg: "rgba(139,149,167,0.08)", border: "rgba(139,149,167,0.2)" },
+    PAUSED:   { color: "#8B95A7", bg: "rgba(139,149,167,0.08)", border: "rgba(139,149,167,0.2)" },
+    MISSING:  { color: "#EF4444", bg: "rgba(239,68,68,0.08)", border: "rgba(239,68,68,0.2)" },
+  };
+
+  const inp = "w-full px-3 py-2 rounded-lg text-[13px] outline-none";
+  const inpStyle = { background: "#0A111B", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" };
+
+  return (
+    <div className="mt-4 rounded-xl overflow-hidden" style={{ border: "1px solid rgba(108,99,255,0.25)" }}>
+      {/* Header */}
+      <div className="flex items-center gap-2.5 px-4 py-3"
+        style={{ background: "rgba(108,99,255,0.07)", borderBottom: "1px solid rgba(108,99,255,0.15)" }}>
+        <Zap size={14} style={{ color: "#8B85FF" }} />
+        <span className="text-[12px] font-semibold" style={{ color: "#A89DFF" }}>
+          Meta Utility Registration
+        </span>
+        <span className="text-[10.5px] ml-auto" style={{ color: "#8B95A7" }}>
+          Required to send outside the 24-hour window
+        </span>
+      </div>
+
+      <div className="p-4 flex flex-col gap-4" style={{ background: "rgba(108,99,255,0.03)" }}>
+        {/* Not-utility warning */}
+        {!template.isUtility && (
+          <div className="flex items-start gap-2 p-2.5 rounded-lg text-[11.5px]"
+            style={{ background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.2)", color: "#F59E0B" }}>
+            <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+            Enable &ldquo;Mark as utility template&rdquo; above and save before registering.
+          </div>
+        )}
+
+        {/* Existing registrations */}
+        {registrations.length > 0 && (
+          <div className="flex flex-col gap-2">
+            <div className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#8B95A7" }}>
+              Current registrations
+            </div>
+            {registrations.map(reg => {
+              const s = sc[reg.status] ?? sc.MISSING;
+              const isPending = ["PENDING", "CREATING"].includes(reg.status);
+              const isRefreshing = refreshingId === reg.id;
+              return (
+                <div key={reg.id} className="flex items-start gap-3 px-3 py-2.5 rounded-lg"
+                  style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[12px] font-medium" style={{ color: "#F5F7FA" }}>
+                      {reg.metaTemplateName}
+                    </div>
+                    <div className="text-[10px] font-mono mt-0.5" style={{ color: "rgba(139,149,167,0.6)" }}>
+                      {reg.pageId}
+                    </div>
+                    {reg.lastError && reg.status !== "APPROVED" && (
+                      <div className="text-[10px] mt-0.5" style={{ color: "#EF4444" }}>{reg.lastError}</div>
+                    )}
+                  </div>
+                  <div className="shrink-0 flex items-center gap-2">
+                    <span className="px-2 py-0.5 rounded-full text-[10.5px] font-semibold"
+                      style={{ color: s.color, background: s.bg, border: `1px solid ${s.border}` }}>
+                      {reg.status === "APPROVED" ? "✓ Approved" : reg.status}
+                    </span>
+                    {isPending && (
+                      <button
+                        disabled={isRefreshing}
+                        onClick={() => handleRefresh(reg)}
+                        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium disabled:opacity-40"
+                        style={{ color: "#8B85FF", background: "rgba(108,99,255,0.08)", border: "1px solid rgba(108,99,255,0.2)" }}>
+                        <RefreshCw size={11} className={isRefreshing ? "animate-spin" : ""} />
+                        {isRefreshing ? "Checking…" : "Refresh Status"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Register for a customer's page */}
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: "#8B95A7" }}>
+            {registrations.length === 0 ? "Register with Meta" : "Register for another page"}
+          </div>
+          <WorkspacePagePicker
+            compact
+            onSelect={(wsId, pgId) => { setWorkspaceId(wsId); setSelectedPageId(pgId); }}
+          />
+          <button
+            disabled={registering || !selectedPageId || !workspaceId || !template.isUtility}
+            onClick={handleRegister}
+            className="mt-2 shrink-0 flex items-center gap-2 px-4 py-2 rounded-lg text-[12.5px] font-semibold text-white disabled:opacity-40"
+            style={{ background: "#6C63FF" }}>
+            {registering
+              ? <><Loader2 size={13} className="animate-spin" /> Registering…</>
+              : <><Zap size={13} /> Register with Meta</>}
+          </button>
+        </div>
+
+        {/* After-registration note */}
+        {registrations.some(r => r.status === "APPROVED") ? (
+          <div className="flex items-center gap-2 text-[11.5px]"
+            style={{ color: "#10B981" }}>
+            <Check size={12} className="shrink-0" />
+            This template is approved and will appear in <strong>Bulk Text → Step 2</strong> for the registered page.
+          </div>
+        ) : (
+          <p className="text-[10.5px] leading-relaxed" style={{ color: "#8B95A7" }}>
+            Meta typically auto-approves utility templates within seconds. After approval this template
+            appears in <strong style={{ color: "#F5F7FA" }}>Bulk Text → Step 2</strong> for the registered page.
+          </p>
+        )}
+
+        {error && (
+          <div className="flex items-start gap-2 p-2.5 rounded-lg text-[11.5px]"
+            style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", color: "#EF4444" }}>
+            <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+            {error}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Templates Manager ─────────────────────────────────────────────────────────
 
 const STATUS_FILTERS = ["All", "Active", "Draft", "Inactive"] as const;
@@ -320,6 +719,8 @@ export default function TemplatesManager({ initialTemplates }: { initialTemplate
   const [duplicating, setDuplicating] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
   const [catFilter, setCatFilter] = useState("All");
+  const [registerTarget, setRegisterTarget] = useState<GlobalTemplate | null>(null);
+  const [refreshing, setRefreshing] = useState<string | null>(null);
 
   const fmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" });
 
@@ -353,7 +754,7 @@ export default function TemplatesManager({ initialTemplates }: { initialTemplate
       });
       if (res.ok) {
         const { template } = await res.json() as { template: GlobalTemplate };
-        setTemplates(p => [template, ...p]);
+        setTemplates(p => [{ ...template, utilityRegistrations: [] }, ...p]);
         setShowNew(false);
       }
     } finally { setSaving(false); }
@@ -369,7 +770,8 @@ export default function TemplatesManager({ initialTemplates }: { initialTemplate
       });
       if (res.ok) {
         const { template } = await res.json() as { template: GlobalTemplate };
-        setTemplates(p => p.map(t => t.id === id ? template : t));
+        // PATCH response doesn't include utilityRegistrations — preserve existing ones
+        setTemplates(p => p.map(t => t.id === id ? { ...template, utilityRegistrations: t.utilityRegistrations } : t));
         setEditId(null);
       }
     } finally { setSaving(false); }
@@ -394,6 +796,25 @@ export default function TemplatesManager({ initialTemplates }: { initialTemplate
       }
     } catch { /* silent */ }
     setDuplicating(null);
+  }
+
+  async function handleRefreshRegistration(templateId: string, reg: RegistrationInfo) {
+    setRefreshing(reg.id);
+    try {
+      const res = await fetch(`/api/admin/templates/${templateId}/refresh-registration`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId: reg.workspaceId, pageId: reg.pageId, registrationId: reg.id }),
+      });
+      const data = await res.json() as { registration?: RegistrationInfo };
+      if (res.ok && data.registration) {
+        setTemplates(p => p.map(t => t.id === templateId
+          ? { ...t, utilityRegistrations: (t.utilityRegistrations ?? []).map(r => r.id === reg.id ? data.registration! : r) }
+          : t
+        ));
+      }
+    } catch { /* silent */ }
+    setRefreshing(null);
   }
 
   async function handleStatusToggle(t: GlobalTemplate, newStatus: TemplateStatus) {
@@ -500,6 +921,58 @@ export default function TemplatesManager({ initialTemplates }: { initialTemplate
                 </div>
                 <div className="text-[11.5px]" style={{ color: "#8B95A7" }}>{fmt.format(new Date(t.createdAt))}</div>
                 <div className="flex items-center gap-1">
+                  {/* Meta utility registration status */}
+                  {(() => {
+                    const regs = t.utilityRegistrations ?? [];
+                    const approved = regs.find(r => r.status === "APPROVED");
+                    const pending = regs.find(r => ["PENDING", "CREATING"].includes(r.status));
+                    const rejected = regs.find(r => r.status === "REJECTED");
+                    if (approved) return (
+                      <span className="h-6 px-2 flex items-center gap-1 rounded-lg text-[10px] font-semibold"
+                        style={{ color: "#10B981", background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)" }}
+                        title={`Approved as ${approved.metaTemplateName}`}>
+                        <Zap size={9} /> Utility ✓
+                      </span>
+                    );
+                    if (pending) return (
+                      <>
+                        <span className="h-6 px-2 flex items-center gap-1 rounded-lg text-[10px] font-semibold"
+                          style={{ color: "#F59E0B", background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)" }}>
+                          <Loader2 size={9} className={refreshing === pending.id ? "animate-spin" : ""} /> {pending.status}
+                        </span>
+                        <button title="Refresh Meta approval status"
+                          disabled={refreshing === pending.id}
+                          onClick={() => handleRefreshRegistration(t.id, pending)}
+                          className="h-6 w-6 flex items-center justify-center rounded-lg disabled:opacity-40"
+                          style={{ color: "#8B95A7", background: "rgba(255,255,255,0.04)" }}>
+                          <RefreshCw size={9} />
+                        </button>
+                      </>
+                    );
+                    if (rejected) return (
+                      <>
+                        <span className="h-6 px-2 flex items-center gap-1 rounded-lg text-[10px] font-semibold"
+                          title={rejected.lastError ?? ""}
+                          style={{ color: "#EF4444", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
+                          <Zap size={9} /> Rejected
+                        </span>
+                        <button title="Re-register with Meta"
+                          onClick={() => setRegisterTarget(t)}
+                          className="h-6 px-2 flex items-center gap-1 rounded-lg text-[10px] font-semibold"
+                          style={{ color: "#8B85FF", background: "rgba(108,99,255,0.08)", border: "1px solid rgba(108,99,255,0.2)" }}>
+                          <Zap size={9} /> Retry
+                        </button>
+                      </>
+                    );
+                    return (
+                      <button title="Register with Meta as utility template"
+                        onClick={() => setRegisterTarget(t)}
+                        className="h-6 px-2 flex items-center gap-1 rounded-lg text-[10px] font-semibold"
+                        style={{ color: "#8B85FF", background: "rgba(108,99,255,0.08)", border: "1px solid rgba(108,99,255,0.2)" }}>
+                        <Zap size={9} /> Register
+                      </button>
+                    );
+                  })()}
                   {/* Activate / Deactivate quick toggle */}
                   {tStatus !== "active" && (
                     <button title="Activate"
@@ -547,10 +1020,15 @@ export default function TemplatesManager({ initialTemplates }: { initialTemplate
                       fields: (t.fields as TemplateField[] | null) ?? [],
                       category: t.category ?? ADMIN_CATEGORIES[0],
                       status: tStatus,
+                      isUtility: t.isUtility ?? false,
                     }}
                     onSave={form => handleEdit(t.id, form)}
                     onCancel={() => setEditId(null)}
                     saving={saving}
+                  />
+                  <RegistrationPanel
+                    template={t}
+                    onUpdate={regs => setTemplates(p => p.map(x => x.id === t.id ? { ...x, utilityRegistrations: regs } : x))}
                   />
                 </div>
               )}
@@ -565,6 +1043,21 @@ export default function TemplatesManager({ initialTemplates }: { initialTemplate
           onCancel={() => setDeleteTarget(null)}
           onConfirm={handleDeleteConfirm}
           deleting={deleting}
+        />
+      )}
+
+      {registerTarget && (
+        <RegisterMetaModal
+          template={registerTarget}
+          onCancel={() => setRegisterTarget(null)}
+          onSuccess={reg => {
+            const tid = registerTarget.id;
+            setTemplates(p => p.map(t => t.id === tid
+              ? { ...t, utilityRegistrations: [...(t.utilityRegistrations ?? []).filter(r => r.id !== reg.id), reg] }
+              : t
+            ));
+            setRegisterTarget(null);
+          }}
         />
       )}
     </div>

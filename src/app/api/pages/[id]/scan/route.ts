@@ -101,7 +101,7 @@ export async function POST(
           // Identify the customer participant (not the page itself)
           const customer = thread.participants.data.find(p => p.id !== page.pageId);
 
-          if (!customer) {
+          if (!customer || !/^\d{5,30}$/.test(customer.id)) {
             batchStats.skippedNoCustomer++;
             // Log the first few skipped threads for diagnosis
             if (batchStats.skippedNoCustomer <= 3) {
@@ -118,7 +118,7 @@ export async function POST(
 
           // Latest inbound message determines the 24-hour window eligibility
           const latestInboundAt = threadMsgs
-            .filter(m => m.from?.id !== page.pageId)
+            .filter(m => m.from?.id === customer.id && Number.isFinite(new Date(m.created_time).getTime()) && new Date(m.created_time) <= new Date())
             .reduce<Date | null>((max, m) => {
               const t = new Date(m.created_time);
               return max === null || t > max ? t : max;
@@ -176,6 +176,7 @@ export async function POST(
                 // contacts that were scanned under a different internal page ID
                 // (e.g., after the page was disconnected and reconnected).
                 pageId: row.pageId,
+                ...(row.lastMessageAt ? { relationshipVerifiedAt: row.lastMessageAt } : {}),
                 ...(row.name ? { name: row.name } : {}),
               },
               create: {
@@ -184,6 +185,7 @@ export async function POST(
                 metaUserId: row.metaUserId,
                 name: row.name,
                 isSubscribed: true,
+                relationshipVerifiedAt: row.lastMessageAt,
               },
               select: { id: true, metaUserId: true, lastMessageAt: true },
             }),

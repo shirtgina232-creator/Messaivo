@@ -31,5 +31,5 @@ export async function getWorkspace(): Promise<Workspace | null> {
     include: { workspace: true },
   });
 
-  return user?.workspace ?? null;
+  return user?.status === "ACTIVE" ? user.workspace : null;
 }

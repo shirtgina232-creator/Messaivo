@@ -1,12 +1,13 @@
 import { prisma } from "@/lib/db";
-import { requireAdminOrError, logAdminAction } from "@/lib/admin-helpers";
+import { requireSuperAdminOrError, logAdminAction } from "@/lib/admin-helpers";
 import { created, notFound, serverError } from "@/lib/api-helpers";
 
 export async function POST(
   _req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const [admin, err] = await requireAdminOrError();
+  // Template duplication is Super Admin only.
+  const [admin, err] = await requireSuperAdminOrError();
   if (err) return err;
   try {
     const { id } = await params;

@@ -55,7 +55,7 @@ export async function GET(req: Request) {
 
   const useConfigId = !!(configId && process.env.NODE_ENV === "production");
 
-  const oauthUrl = new URL("https://www.facebook.com/v19.0/dialog/oauth");
+  const oauthUrl = new URL("https://www.facebook.com/v26.0/dialog/oauth");
   oauthUrl.searchParams.set("client_id", appId);
   oauthUrl.searchParams.set("redirect_uri", cbUrl);
   oauthUrl.searchParams.set("response_type", "code");
@@ -69,7 +69,7 @@ export async function GET(req: Request) {
     // Standard Facebook Login: used in development and as fallback when config_id is absent.
     // The redirect URI is validated against the standard "Valid OAuth Redirect URIs" list,
     // where localhost:3000 is whitelisted.
-    oauthUrl.searchParams.set("scope", "pages_show_list,pages_messaging,pages_manage_metadata");
+    oauthUrl.searchParams.set("scope", "pages_show_list,pages_messaging,pages_manage_metadata,pages_utility_messaging");
   }
 
   const res = NextResponse.redirect(oauthUrl.toString());

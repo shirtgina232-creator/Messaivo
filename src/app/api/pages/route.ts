@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { getWorkspace, unauthorized, badRequest, serverError, ok, created } from "@/lib/api-helpers";
+import { getWorkspace, unauthorized, badRequest, serverError, ok } from "@/lib/api-helpers";
 
 // Fields returned to the client — accessToken is intentionally excluded
 const PAGE_SELECT = {
@@ -10,6 +10,9 @@ const PAGE_SELECT = {
   pageAvatar: true,
   instagramAccountId: true,
   instagramUsername: true,
+  utilityPermissionGranted: true,
+  permissionsCheckedAt: true,
+  permissionError: true,
   isActive: true,
   lastSyncedAt: true,
   scanStatus: true,
@@ -42,56 +45,4 @@ export async function GET(req: Request) {
   }
 }
 
-export async function POST(req: Request) {
-  try {
-    const ws = await getWorkspace();
-    if (!ws) return unauthorized();
-
-    // Meta credentials must be configured before connecting a page
-    if (!process.env.META_APP_ID || !process.env.META_APP_SECRET) {
-      return badRequest(
-        "Meta credentials are not configured. Set META_APP_ID and META_APP_SECRET in .env.local before connecting a page."
-      );
-    }
-
-    let body: unknown;
-    try {
-      body = await req.json();
-    } catch {
-      return badRequest("Invalid JSON body");
-    }
-
-    const { pageId, pageName, accessToken, pageCategory, pageAvatar } =
-      body as Record<string, unknown>;
-
-    if (!pageId || typeof pageId !== "string") return badRequest("pageId is required");
-    if (!pageName || typeof pageName !== "string") return badRequest("pageName is required");
-    if (!accessToken || typeof accessToken !== "string") return badRequest("accessToken is required");
-
-    const page = await prisma.facebookPage.upsert({
-      where: { workspaceId_pageId: { workspaceId: ws.id, pageId } },
-      update: {
-        pageName,
-        accessToken,
-        pageCategory: typeof pageCategory === "string" ? pageCategory : undefined,
-        pageAvatar: typeof pageAvatar === "string" ? pageAvatar : undefined,
-        isActive: true,
-        lastSyncedAt: new Date(),
-      },
-      create: {
-        workspaceId: ws.id,
-        pageId,
-        pageName,
-        accessToken,
-        pageCategory: typeof pageCategory === "string" ? pageCategory : null,
-        pageAvatar: typeof pageAvatar === "string" ? pageAvatar : null,
-      },
-      select: PAGE_SELECT,
-    });
-
-    return created({ page });
-  } catch (e) {
-    console.error("[POST /api/pages]", e);
-    return serverError();
-  }
-}
+export async function POST() { const ws = await getWorkspace(); if (!ws) return unauthorized(); return badRequest("Connect Pages through Facebook OAuth so Page ownership and grants can be verified"); }
