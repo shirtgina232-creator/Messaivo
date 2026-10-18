@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
@@ -52,6 +52,7 @@ interface AvailableTemplate {
 }
 
 interface GroupItem { id: string; name: string; _count?: { members: number } }
+interface ContactItem { id: string; name: string | null; firstName: string | null; lastName: string | null; metaUserId: string }
 
 // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -64,7 +65,7 @@ function timeAgo(iso: string) {
 }
 
 function fmtDate(iso: string | null) {
-  if (!iso) return "â€”";
+  if (!iso) return "\u2014";
   return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
@@ -100,7 +101,7 @@ function StatusBadge({ status }: { status: string }) {
 function ProgressCell({ b }: { b: BroadcastItem }) {
   const total = b.totalRecipients ?? b._count?.recipients ?? 0;
   const sent = b.sentCount ?? 0;
-  if (total === 0) return <span style={{ color: "#8B95A7", fontSize: 12 }}>â€”</span>;
+  if (total === 0) return <span style={{ color: "#8B95A7", fontSize: 12 }}>â€"</span>;
   const pct = Math.round((sent / total) * 100);
   return (
     <div className="flex flex-col gap-1 min-w-[90px]">
@@ -384,10 +385,13 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
   const [pageId, setPageId] = useState(pages[0]?.id ?? "");
 
   // â”€â”€ Audience â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  const [recipientMode, setRecipientMode] = useState<"all" | "groups">("all");
+  const [recipientMode, setRecipientMode] = useState<"all" | "groups" | "contacts">("all");
   const [groups, setGroups] = useState<GroupItem[]>([]);
   const [selectedGroups, setSelectedGroups] = useState<Set<string>>(new Set());
   const [groupsLoading, setGroupsLoading] = useState(false);
+  const [contactItems, setContactItems] = useState<ContactItem[]>([]);
+  const [selectedContacts, setSelectedContacts] = useState<Set<string>>(new Set());
+  const [contactsLoading, setContactsLoading] = useState(false);
 
   // â”€â”€ Reachable count â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [reachable, setReachable] = useState<{
@@ -440,6 +444,17 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
       .catch(() => {})
       .finally(() => setGroupsLoading(false));
   }, [recipientMode]);
+
+  // load contacts for Specific Contacts mode
+  useEffect(() => {
+    if (recipientMode !== "contacts" || !pageId) return;
+    setContactsLoading(true);
+    fetch(`/api/contacts?pageId=${encodeURIComponent(pageId)}&limit=100`)
+      .then(r => r.ok ? r.json() : null)
+      .then((d: { contacts?: ContactItem[] } | null) => { if (d?.contacts) setContactItems(d.contacts); })
+      .catch(() => {})
+      .finally(() => setContactsLoading(false));
+  }, [recipientMode, pageId]);
 
   // â”€â”€ Init field values when template changes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   useEffect(() => {
@@ -526,7 +541,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
       ? !!selectedTemplate && allRequiredFilled
       : !!customMessage.trim()) &&
     (scheduleMode === "now" || !!schedDate) &&
-    (recipientMode === "all" || selectedGroups.size > 0) &&
+    (recipientMode === "all" || selectedGroups.size > 0 || (recipientMode === "contacts" && selectedContacts.size > 0)) &&
     utilityTemplateReady;
 
   const handleSend = useCallback(async (mode: "send" | "draft") => {
@@ -549,6 +564,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
       }
 
       if (recipientMode === "all") body.allPageContacts = true;
+      else if (recipientMode === "contacts") body.contactIds = [...selectedContacts];
       else body.groupIds = [...selectedGroups];
 
       if (mode === "send" && scheduleMode === "later" && schedDate) {
@@ -579,7 +595,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
       onCreated(); onClose();
     } catch { setError("Network error. Please try again."); }
     finally { setSubmitting(false); }
-  }, [pageId, broadcastName, messageMode, selectedTemplate, fieldValues, customMessage, recipientMode, selectedGroups, scheduleMode, schedDate, messagingType, onCreated, onClose]);
+  }, [pageId, broadcastName, messageMode, selectedTemplate, fieldValues, customMessage, recipientMode, selectedGroups, selectedContacts, scheduleMode, schedDate, messagingType, onCreated, onClose]);
 
   const FIELD_STYLE = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" };
 
@@ -734,8 +750,8 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
           {/* â‘¢ Audience */}
           <FormSection label="Send To">
             <div className="flex gap-2">
-              {([["all", "All Subscribers"], ["groups", "Specific Groups"]] as const).map(([m, lbl]) => (
-                <button key={m} onClick={() => { setRecipientMode(m); setSelectedGroups(new Set()); }}
+              {([["all", "All Subscribers"], ["groups", "Specific Groups"], ["contacts", "Specific Contacts"]] as const).map(([m, lbl]) => (
+                <button key={m} onClick={() => { setRecipientMode(m); setSelectedGroups(new Set()); setSelectedContacts(new Set()); }}
                   className="flex-1 py-2 rounded-lg text-[12.5px] font-medium"
                   style={{
                     background: recipientMode === m ? "rgba(108,99,255,0.12)" : "rgba(255,255,255,0.03)",
@@ -767,9 +783,32 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
                   ))}
               </div>
             )}
+            {recipientMode === "contacts" && (
+              <div className="mt-2 rounded-lg overflow-hidden" style={{ border: "1px solid rgba(255,255,255,0.07)" }}>
+                {contactsLoading
+                  ? <div className="flex items-center gap-2 p-3 text-[12px]" style={{ color: "#8B95A7" }}><Loader2 size={12} className="animate-spin" /> Loading contacts...</div>
+                  : contactItems.length === 0
+                  ? <p className="p-3 text-[12px]" style={{ color: "#8B95A7" }}>No contacts found for this page.</p>
+                  : contactItems.map((c, i) => {
+                    const displayName = (c.name ?? [c.firstName, c.lastName].filter(Boolean).join(" ")) || c.metaUserId;
+                    return (
+                      <button key={c.id}
+                        onClick={() => setSelectedContacts(prev => { const n = new Set(prev); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n; })}
+                        className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-white/[0.02]"
+                        style={{ borderTop: i > 0 ? "1px solid rgba(255,255,255,0.05)" : "none" }}>
+                        <span className="text-[12.5px]" style={{ color: "#C4CDD8" }}>{displayName}</span>
+                        <div className="w-4 h-4 rounded flex items-center justify-center"
+                          style={{ background: selectedContacts.has(c.id) ? "#6C63FF" : "rgba(255,255,255,0.07)", border: `1px solid ${selectedContacts.has(c.id) ? "#6C63FF" : "rgba(255,255,255,0.15)"}` }}>
+                          {selectedContacts.has(c.id) && <CheckCircle2 size={10} style={{ color: "#fff" }} />}
+                        </div>
+                      </button>
+                    );
+                  })}
+              </div>
+            )}
           </FormSection>
 
-          {/* â‘£ Message */}
+          {/* â’£ Message */}
           <FormSection label="Message">
             {/* Mode tabs */}
             <div className="flex gap-2 mb-3">
