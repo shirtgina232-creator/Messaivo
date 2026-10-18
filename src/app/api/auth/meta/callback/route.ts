@@ -3,6 +3,7 @@ import { createHmac, timingSafeEqual } from "crypto";
 import { prisma } from "@/lib/db";
 import { encryptToken } from "@/lib/token-crypto";
 import { metaCallbackUrl } from "@/lib/meta-oauth";
+import { subscribePageToWebhook } from "@/lib/meta-graph";
 
 /**
  * Trusted Messaivo hosts that may appear as the OAuth origin.
@@ -129,6 +130,13 @@ export async function GET(req: Request) {
   const fbErr  = url.searchParams.get("error");
   const fbDesc = url.searchParams.get("error_description");
 
+  console.log("[meta/callback] received", {
+    hasCode: !!code,
+    hasState: !!state,
+    hasFbErr: !!fbErr,
+    callbackUrl: url.origin + url.pathname,
+  });
+
   // ── Facebook-side errors (user declined, app not configured, etc.) ───────────
   if (fbErr) {
     console.warn("[meta/callback] Facebook returned error param", { fbErr, fbDesc });
@@ -145,10 +153,11 @@ export async function GET(req: Request) {
   // from any host; cookies set on the initiating host are not sent to the callback.
   const stateVerification = verifyState(state);
   if (!stateVerification.ok) {
-    console.warn("[meta/callback] invalid state", { reason: stateVerification.reason });
-    return redirect(req, "invalid_state");
+    console.warn("[meta/callback] state validation failed", { reason: stateVerification.reason });
+    return redirect(req, `invalid_state_${stateVerification.reason}`);
   }
   const savedClerkId = stateVerification.userId;
+  console.log("[meta/callback] state valid", { originHost: stateVerification.originHost });
 
   // ── Env-var pre-flight (cheap checks before spending the OAuth code) ─────────
   const appId     = process.env.META_APP_ID;
@@ -159,7 +168,6 @@ export async function GET(req: Request) {
   }
 
   const encKeyLen = (process.env.META_TOKEN_ENCRYPTION_KEY ?? "").length;
-
   if (process.env.NODE_ENV === "production" && encKeyLen < 64) {
     console.error(
       "[meta/callback] META_TOKEN_ENCRYPTION_KEY is missing or too short in Vercel " +
@@ -169,6 +177,7 @@ export async function GET(req: Request) {
   }
 
   const cbUrl = metaCallbackUrl(req);
+  console.log("[meta/callback] using redirect_uri", cbUrl);
 
   try {
     // ── Workspace — resolved via userId from HMAC-signed state, not from auth() ──
@@ -181,7 +190,11 @@ export async function GET(req: Request) {
     });
     const ws = dbUser?.workspace ?? null;
     if (!ws || dbUser?.status !== "ACTIVE") {
-      console.warn("[meta/callback] No workspace found for clerkId from state cookie", { clerkId: savedClerkId });
+      console.warn("[meta/callback] workspace lookup failed", {
+        clerkId: savedClerkId,
+        found: !!dbUser,
+        status: dbUser?.status ?? "none",
+      });
       const res = NextResponse.redirect(new URL("/app/pages?error=session_expired", req.url));
       res.cookies.delete("meta_oauth_state");
       return res;
@@ -189,6 +202,7 @@ export async function GET(req: Request) {
     console.log("[meta/callback] workspace found", { workspaceId: ws.id });
 
     // ── 1. Short-lived user token ──────────────────────────────────────────────
+    console.log("[meta/callback] exchanging code for short-lived token");
     const t1url = new URL(`${GRAPH}/oauth/access_token`);
     t1url.searchParams.set("client_id", appId);
     t1url.searchParams.set("client_secret", appSecret);
@@ -197,17 +211,21 @@ export async function GET(req: Request) {
 
     const t1Result = await fetchJson<TokenResp>(t1url.toString());
     if (!t1Result.ok) {
-      console.error("[meta/callback] short-lived token failed:", t1Result.error);
+      console.error("[meta/callback] short-lived token exchange failed (HTTP/network):", t1Result.error, { status: t1Result.status });
       return redirect(req, "token_error");
     }
     if (!t1Result.data.access_token) {
-      console.error("[meta/callback] short-lived token exchange failed:", t1Result.data.error?.message ?? "no access_token");
+      console.error("[meta/callback] short-lived token exchange failed (Graph error):",
+        t1Result.data.error?.message ?? "no access_token in response",
+        { errorCode: t1Result.data.error?.code }
+      );
       return redirect(req, "token_error");
     }
     const shortLivedToken = t1Result.data.access_token;
-    console.log("[meta/callback] short-lived token obtained");
+    console.log("[meta/callback] short-lived user token obtained");
 
     // ── 2. Long-lived user token (best-effort; fall back to short-lived) ────────
+    console.log("[meta/callback] exchanging for long-lived user token");
     const t2url = new URL(`${GRAPH}/oauth/access_token`);
     t2url.searchParams.set("grant_type", "fb_exchange_token");
     t2url.searchParams.set("client_id", appId);
@@ -218,9 +236,13 @@ export async function GET(req: Request) {
     const userToken = (t2Result.ok && t2Result.data.access_token)
       ? t2Result.data.access_token
       : shortLivedToken;  // fall back gracefully
-    console.log("[meta/callback] user token ready", { longLived: userToken !== shortLivedToken });
+    console.log("[meta/callback] user token ready", {
+      longLived: userToken !== shortLivedToken,
+      exchangeError: !t2Result.ok ? t2Result.error : null,
+    });
 
     // ── 3. Pages the user manages ──────────────────────────────────────────────
+    console.log("[meta/callback] fetching managed pages from /me/accounts");
     const pUrl = new URL(`${GRAPH}/me/accounts`);
     pUrl.searchParams.set("access_token", userToken);
     pUrl.searchParams.set("fields", "id,name,category,access_token,picture{url}");
@@ -228,31 +250,44 @@ export async function GET(req: Request) {
 
     const pResult = await fetchJson<AccountsResp>(pUrl.toString());
     if (!pResult.ok) {
-      console.error("[meta/callback] me/accounts failed:", pResult.error);
+      console.error("[meta/callback] /me/accounts failed (HTTP/network):", pResult.error, { status: pResult.status });
       return redirect(req, "token_error");
     }
     if (pResult.data.error) {
-      console.error("[meta/callback] me/accounts Graph error:", pResult.data.error.message, "code:", pResult.data.error.code);
+      console.error("[meta/callback] /me/accounts Graph error:",
+        pResult.data.error.message, { code: pResult.data.error.code }
+      );
       return redirect(req, "token_error");
     }
-    if (!pResult.data.data?.length) {
-      console.warn("[meta/callback] me/accounts returned 0 pages for this token");
+    const pages = pResult.data.data ?? [];
+    console.log("[meta/callback] /me/accounts result", {
+      totalPages: pages.length,
+      pageIds: pages.map(p => p.id),
+      pagesWithToken: pages.filter(p => !!p.access_token).length,
+    });
+    if (!pages.length) {
+      console.warn("[meta/callback] /me/accounts returned 0 pages — user may not manage any pages");
       return redirect(req, "no_pages");
     }
-    const pages = pResult.data.data;
-    console.log("[meta/callback] pages fetched", { count: pages.length });
 
-    // ── 4. Encrypt & upsert ────────────────────────────────────────────────────
+    // ── 4. Encrypt & upsert each page ─────────────────────────────────────────
+    // Pages without an access_token are skipped (unlikely but defensive).
+    // New pages are created inactive; existing records get their token refreshed.
+    const upsertedPageIds: string[] = [];
     for (const p of pages) {
-      if (!p.access_token) continue;
+      if (!p.access_token) {
+        console.warn("[meta/callback] page missing access_token, skipping", { pageId: p.id, pageName: p.name });
+        continue;
+      }
 
       let encryptedToken: string;
       try {
         encryptedToken = encryptToken(p.access_token);
       } catch (err) {
         console.error(
-          "[meta/callback] encryptToken failed — check META_TOKEN_ENCRYPTION_KEY in Vercel:",
-          err instanceof Error ? err.message : String(err)
+          "[meta/callback] encryptToken failed for page — check META_TOKEN_ENCRYPTION_KEY in Vercel:",
+          err instanceof Error ? err.message : String(err),
+          { pageId: p.id }
         );
         return redirect(req, "encryption_error");
       }
@@ -260,13 +295,13 @@ export async function GET(req: Request) {
       await prisma.facebookPage.upsert({
         where: { workspaceId_pageId: { workspaceId: ws.id, pageId: p.id } },
         update: {
-          pageName:          p.name,
-          accessToken:       encryptedToken,
-          pageCategory:      p.category ?? null,
-          pageAvatar:        p.picture?.data?.url ?? null,
+          pageName:                 p.name,
+          accessToken:              encryptedToken,
+          pageCategory:             p.category ?? null,
+          pageAvatar:               p.picture?.data?.url ?? null,
           utilityPermissionGranted: false,
-          permissionsCheckedAt: null,
-          lastSyncedAt:      new Date(),
+          permissionsCheckedAt:     null,
+          lastSyncedAt:             new Date(),
         },
         create: {
           workspaceId:  ws.id,
@@ -279,16 +314,45 @@ export async function GET(req: Request) {
         },
         select: { id: true },
       });
+      upsertedPageIds.push(p.id);
+      console.log("[meta/callback] page token saved", { pageId: p.id, pageName: p.name });
+    }
+    console.log("[meta/callback] DB upsert complete", { upsertedCount: upsertedPageIds.length });
+
+    // ── 5. Re-subscribe webhook for active pages using the fresh token ─────────
+    // This runs unconditionally on every OAuth flow — first connect and reconnect
+    // alike — so a stale or expired Meta subscription is always refreshed when the
+    // user completes the OAuth dialog.  webhookSubscribed:true in the DB merely
+    // records that we attempted it once; it cannot guarantee Meta's subscription
+    // is still active after a token expiry, so we never skip this step.
+    for (const p of pages) {
+      if (!p.access_token) continue;
+      const activePage = await prisma.facebookPage.findFirst({
+        where: { workspaceId: ws.id, pageId: p.id, isActive: true },
+        select: { id: true },
+      });
+      if (!activePage) continue; // new/inactive pages are subscribed when first activated via PATCH
+      console.log("[meta/callback] re-subscribing webhook for active page", { pageId: p.id });
+      const subResult = await subscribePageToWebhook(p.access_token, p.id);
+      if (subResult.success) {
+        await prisma.facebookPage.update({
+          where: { id: activePage.id },
+          data: { webhookSubscribed: true },
+        });
+        console.log("[meta/callback] webhook subscription confirmed", { pageId: p.id });
+      } else {
+        console.warn("[meta/callback] webhook subscription failed", { pageId: p.id, error: subResult.error });
+      }
     }
 
-    // Relay redirect: send the browser back to the HOST that initiated the
-    // OAuth flow (stored in the signed state as `h`).  That host is where
-    // the Clerk __session cookie lives.  Validate against the allowlist so we
-    // can never be used as an open redirector.
+    // ── Relay redirect ─────────────────────────────────────────────────────────
+    // Send the browser back to the HOST that initiated the OAuth flow (stored in
+    // the signed state as `h`). That host is where the Clerk session lives.
+    // Validate against the allowlist so we can never be used as an open redirector.
     const relayHost = isAllowedHost(stateVerification.originHost)
       ? stateVerification.originHost
-      : "www.messaivo.com"; // safe fallback for any unknown host
-    console.log("[meta/callback] OAuth complete — redirecting via relay to page selection", {
+      : "www.messaivo.com";
+    console.log("[meta/callback] OAuth complete — redirecting via relay", {
       relayHost,
       originHost: stateVerification.originHost,
     });

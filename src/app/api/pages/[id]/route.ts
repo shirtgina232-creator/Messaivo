@@ -79,9 +79,9 @@ export async function PATCH(
       select: { ...PAGE_SELECT, accessToken: true },
     });
 
-    // When a page is activated for the first time (or re-activated without a webhook subscription),
-    // subscribe it to the required Messenger webhook fields.
-    if (isActive === true && !existing.webhookSubscribed) {
+    // Always re-subscribe when activating — token may have been refreshed via OAuth reconnect,
+    // which resets the Meta subscription. Guard removed intentionally.
+    if (isActive === true) {
       try {
         const plainToken = decryptToken(updated.accessToken);
         const result = await subscribePageToWebhook(plainToken, existing.pageId);
