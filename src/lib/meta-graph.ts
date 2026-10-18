@@ -92,6 +92,19 @@ export async function cloneLibraryTemplate(
   } catch (error) { return { metaTemplateName: cloneName, status: "ERROR", error: error instanceof Error ? error.message : "Clone failed" }; }
 }
 
+// ── Contact profile ───────────────────────────────────────────────────────────
+
+export interface UserProfile {
+  first_name?: string;
+  last_name?: string;
+  name?: string;
+}
+
+/** Fetch a Messenger user's public profile fields from the Graph API. */
+export async function fetchUserProfile(token: string, psid: string): Promise<UserProfile> {
+  return graphRequest(token, `/${psid}?fields=first_name,last_name,name`);
+}
+
 // ── Conversation scan ─────────────────────────────────────────────────────────
 
 export interface MetaConversationParticipant {

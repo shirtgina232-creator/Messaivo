@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { prisma } from "@/lib/db";
 import { decryptToken } from "@/lib/token-crypto";
-import { sendMessengerMessage } from "@/lib/meta-graph";
+import { sendMessengerMessage, fetchUserProfile } from "@/lib/meta-graph";
 
 // ── Meta webhook payload types ─────────────────────────────────────────────────
 
@@ -153,7 +153,7 @@ async function handleMessagingEvent(event: MetaMessagingEvent): Promise<void> {
 
     const page = await prisma.facebookPage.findFirst({
       where: { pageId: recipient.id, isActive: true },
-      select: { id: true, workspaceId: true },
+      select: { id: true, workspaceId: true, accessToken: true },
     });
     if (!page) {
       console.warn(`[Meta webhook] No active page found in DB for pageId=${recipient.id} — check isActive flag and that this page is connected`);
@@ -183,6 +183,29 @@ async function handleMessagingEvent(event: MetaMessagingEvent): Promise<void> {
       },
     });
     console.log(`[Meta webhook] contact upserted: contactId=${contact.id}`);
+
+    // Populate name fields from Meta if not yet stored (fire-and-forget; never blocks the webhook response)
+    if (!contact.firstName && !contact.name) {
+      void (async () => {
+        try {
+          const token = decryptToken(page.accessToken);
+          const profile = await fetchUserProfile(token, sender.id);
+          if (profile.first_name || profile.last_name || profile.name) {
+            await prisma.contact.update({
+              where: { id: contact.id },
+              data: {
+                firstName: profile.first_name ?? undefined,
+                lastName: profile.last_name ?? undefined,
+                name: profile.name ?? undefined,
+              },
+            });
+            console.log(`[Meta webhook] contact name populated: contactId=${contact.id}`);
+          }
+        } catch (err) {
+          console.warn(`[Meta webhook] name fetch failed for contactId=${contact.id}:`, err);
+        }
+      })();
+    }
 
     // Upsert conversation — re-open and bump unread on new message
     const conversation = await prisma.conversation.upsert({

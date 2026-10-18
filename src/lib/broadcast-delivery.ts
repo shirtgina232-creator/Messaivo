@@ -4,7 +4,9 @@ import { sendPayload } from "@/lib/meta-graph";
 import type { Broadcast, Contact } from "@prisma/client";
 
 export async function deliverRecipient(broadcast: Broadcast, contact: Contact, prepared: Awaited<ReturnType<typeof prepareBroadcast>>, requestKey: string, recipientId?: string) {
-  const message = prepareRecipient(broadcast, contact, prepared);
+  // Early eligibility check before acquiring locks. deliveryMessage is re-computed inside
+  // the transaction using a freshly-fetched contact so the sent payload reflects live data.
+  let deliveryMessage = prepareRecipient(broadcast, contact, prepared);
   const attempt = await prisma.$transaction(async tx => {
     // Cancellation and admission serialize on the broadcast. No new send starts after cancellation.
     await tx.$queryRaw`SELECT id FROM "Broadcast" WHERE id = ${broadcast.id} FOR UPDATE`;
@@ -13,7 +15,7 @@ export async function deliverRecipient(broadcast: Broadcast, contact: Contact, p
     const prior = await tx.messagingAttempt.findUnique({ where: { workspaceId_requestKey: { workspaceId: broadcast.workspaceId, requestKey } } });
     if (prior) return prior;
     const freshContact = await tx.contact.findUniqueOrThrow({ where: { id: contact.id } });
-    prepareRecipient(current, freshContact, prepared);
+    deliveryMessage = prepareRecipient(current, freshContact, prepared);
     const activePage = await tx.facebookPage.findFirst({ where: { id: prepared.page.id, workspaceId: broadcast.workspaceId, isActive: true } });
     if (!activePage) throw new Error("Page disconnected");
     await tx.$queryRaw`SELECT id FROM "CreditLedger" WHERE "workspaceId" = ${broadcast.workspaceId} FOR UPDATE`;
@@ -24,7 +26,7 @@ export async function deliverRecipient(broadcast: Broadcast, contact: Contact, p
       if (!claim.count) throw new Error("Recipient already claimed");
     }
     if (!ledger.unlimitedCredits) await tx.creditLedger.update({ where: { workspaceId: broadcast.workspaceId }, data: { usedThisPeriod: { increment: 1 } } });
-    return tx.messagingAttempt.create({ data: { workspaceId: broadcast.workspaceId, pageId: prepared.page.id, contactId: contact.id, broadcastId: broadcast.id, recipientId, requestKey, payload: message.payload, charged: !ledger.unlimitedCredits } });
+    return tx.messagingAttempt.create({ data: { workspaceId: broadcast.workspaceId, pageId: prepared.page.id, contactId: contact.id, broadcastId: broadcast.id, recipientId, requestKey, payload: deliveryMessage.payload, charged: !ledger.unlimitedCredits } });
   });
   // Existing attempts must never be resent (including concurrent Test Send requests).
   // The creator's random ownership token is encoded in the new request key by callers;
@@ -39,7 +41,7 @@ export async function deliverRecipient(broadcast: Broadcast, contact: Contact, p
     if (attempt.charged && status === "failed") await tx.creditLedger.update({ where: { workspaceId: broadcast.workspaceId }, data: { usedThisPeriod: { decrement: 1 } } });
     if (sent) {
       const conversation = await tx.conversation.upsert({ where: { pageId_contactId: { pageId: prepared.page.id, contactId: contact.id } }, create: { workspaceId: broadcast.workspaceId, pageId: prepared.page.id, contactId: contact.id }, update: {} });
-      await tx.message.create({ data: { conversationId: conversation.id, metaMessageId: result.messageId, direction: "outbound", content: message.text, sentAt: new Date(), status: "sent", creditsUsed: attempt.charged ? 1 : 0 } });
+      await tx.message.create({ data: { conversationId: conversation.id, metaMessageId: result.messageId, direction: "outbound", content: deliveryMessage.text, sentAt: new Date(), status: "sent", creditsUsed: attempt.charged ? 1 : 0 } });
       if (attempt.charged) {
         const ledger = await tx.creditLedger.findUniqueOrThrow({ where: { workspaceId: broadcast.workspaceId } });
         await tx.creditTransaction.create({ data: { workspaceId: broadcast.workspaceId, pageId: prepared.page.id, broadcastId: broadcast.id, messageId: result.messageId, type: "DEDUCTION", operation: recipientId ? "BROADCAST_SEND" : "TEST_SEND", amount: -1, balanceAfter: ledger.monthlyAllocation + ledger.bonusCredits - ledger.usedThisPeriod } });
