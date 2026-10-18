@@ -581,6 +581,21 @@ model UtilityTemplateRegistration {
   @@index([workspaceId, pageId, status])
 }
 
+// Audit log for Meta User Data Deletion callbacks. PSIDs are never stored in
+// plaintext — only a SHA-256 hash is kept so deletion can be verified.
+model DataDeletionRequest {
+  id               String    @id @default(cuid())
+  confirmationCode String    @unique
+  userIdHash       String
+  status           String    @default("PROCESSING")
+  deletedContacts  Int       @default(0)
+  error            String?
+  createdAt        DateTime  @default(now())
+  completedAt      DateTime?
+
+  @@index([createdAt])
+}
+
 // Durable outbox record. Unknown outcomes are held for reconciliation, never retried blindly.
 model MessagingAttempt {
   id String @id @default(cuid())
