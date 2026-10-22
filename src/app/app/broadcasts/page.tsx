@@ -5,12 +5,12 @@ import { useRouter } from "next/navigation";
 import {
   Plus, Search, Send, Loader2, ChevronDown, ChevronRight,
   CheckCircle2, Clock, AlertCircle, X, RefreshCw, Users, FileText,
-  Calendar, MessageSquare, StopCircle, ExternalLink, Zap,
+  Calendar, MessageSquare, StopCircle, ExternalLink, Zap, ArrowLeft,
 } from "lucide-react";
 import { useWorkspace } from "@/lib/workspace-context";
 import BulkTextWizard from "@/components/app/BulkTextWizard";
 
-// â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Types â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 type BroadcastStatus = "draft" | "scheduled" | "sending" | "completed" | "failed" | "cancelled";
 
@@ -52,9 +52,9 @@ interface AvailableTemplate {
 }
 
 interface GroupItem { id: string; name: string; _count?: { members: number } }
-interface ContactItem { id: string; name: string | null; firstName: string | null; lastName: string | null; metaUserId: string }
+interface ContactItem { id: string; name: string | null; firstName: string | null; lastName: string | null; metaUserId: string; isSubscribed: boolean; lastMessageAt: string | null; relationshipVerifiedAt: string | null; }
 
-// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Helpers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 function timeAgo(iso: string) {
   const s = (Date.now() - new Date(iso).getTime()) / 1000;
@@ -84,7 +84,7 @@ const STATUS_CFG: Record<BroadcastStatus, { label: string; color: string; bg: st
   cancelled: { label: "Cancelled", color: "#8B95A7", bg: "rgba(139,149,167,0.12)", icon: <X size={10} /> },
 };
 
-// â”€â”€ Status Badge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Status Badge â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 function StatusBadge({ status }: { status: string }) {
   const cfg = STATUS_CFG[status as BroadcastStatus] ?? STATUS_CFG.draft;
@@ -96,12 +96,12 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-// â”€â”€ Progress Bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Progress Bar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 function ProgressCell({ b }: { b: BroadcastItem }) {
   const total = b.totalRecipients ?? b._count?.recipients ?? 0;
   const sent = b.sentCount ?? 0;
-  if (total === 0) return <span style={{ color: "#8B95A7", fontSize: 12 }}>â€"</span>;
+  if (total === 0) return <span style={{ color: "#8B95A7", fontSize: 12 }}>–</span>;
   const pct = Math.round((sent / total) * 100);
   return (
     <div className="flex flex-col gap-1 min-w-[90px]">
@@ -116,7 +116,7 @@ function ProgressCell({ b }: { b: BroadcastItem }) {
   );
 }
 
-// â”€â”€ Cancel Confirm Dialog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Cancel Confirm Dialog â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 function CancelConfirmDialog({ broadcast, onConfirm, onDismiss, cancelling }: {
   broadcast: BroadcastItem;
@@ -184,7 +184,7 @@ function CancelConfirmDialog({ broadcast, onConfirm, onDismiss, cancelling }: {
   );
 }
 
-// â”€â”€ Broadcasts Table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Broadcasts Table â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 function BroadcastsTable({ broadcasts, pageMap, onRefresh, loading, onCancel, onViewDetails }: {
   broadcasts: BroadcastItem[];
@@ -253,7 +253,7 @@ function BroadcastsTable({ broadcasts, pageMap, onRefresh, loading, onCancel, on
                 {/* Row */}
                 <div className="grid items-center px-4 py-3.5 transition-colors hover:bg-white/[0.02]"
                   style={{ gridTemplateColumns: "2fr 1fr 120px 140px 70px 80px" }}>
-                  {/* Campaign â€” clickable to expand */}
+                  {/* Campaign – clickable to expand */}
                   <button
                     onClick={() => setExpanded(prev => {
                       const next = new Set(prev);
@@ -342,7 +342,7 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-// â”€â”€ New Broadcast Slide Panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ New Broadcast Slide Panel â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 // Contact variables auto-resolved per recipient at send time
 const CONTACT_VARS_SET = new Set(["first_name", "last_name", "name", "page_name"]);
@@ -380,11 +380,11 @@ function renderTwoPassPreview(content: string, fieldValues: Record<string, strin
 function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const { pages } = useWorkspace();
 
-  // â”€â”€ Basic info â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â"€â"€ Basic info â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const [broadcastName, setBroadcastName] = useState("");
   const [pageId, setPageId] = useState(pages[0]?.id ?? "");
 
-  // â”€â”€ Audience â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â"€â"€ Audience â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const [recipientMode, setRecipientMode] = useState<"all" | "groups" | "contacts">("all");
   const [groups, setGroups] = useState<GroupItem[]>([]);
   const [selectedGroups, setSelectedGroups] = useState<Set<string>>(new Set());
@@ -392,15 +392,17 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
   const [contactItems, setContactItems] = useState<ContactItem[]>([]);
   const [selectedContacts, setSelectedContacts] = useState<Set<string>>(new Set());
   const [contactsLoading, setContactsLoading] = useState(false);
+  const [contactSearch, setContactSearch] = useState("");
+  const [step, setStep] = useState<"compose" | "confirm">("compose");
 
-  // â”€â”€ Reachable count â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â"€â"€ Reachable count â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const [reachable, setReachable] = useState<{
     total: number; eligible: number;
     windowOpen: number; windowClosed: number; neverMessaged: number; unsubscribed: number;
   } | null>(null);
   const [reachableLoading, setReachableLoading] = useState(false);
 
-  // â”€â”€ Message â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â"€â"€ Message â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const [messageMode, setMessageMode] = useState<"template" | "custom">("template");
   const [templates, setTemplates] = useState<AvailableTemplate[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(true);
@@ -413,18 +415,18 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
   // Custom message (write-message mode)
   const [customMessage, setCustomMessage] = useState("");
 
-  // â”€â”€ Schedule â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â"€â"€ Schedule â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const [scheduleMode, setScheduleMode] = useState<"now" | "later">("now");
   const [schedDate, setSchedDate] = useState("");
 
-  // â”€â”€ Submit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â"€â"€ Submit â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
-  // â”€â”€ Delivery method â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â"€â"€ Delivery method â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const [messagingType, setMessagingType] = useState<"response" | "utility">("response");
 
-  // â”€â”€ Load templates â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â"€â"€ Load templates â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   useEffect(() => {
     const controller = new AbortController();
     setTemplatesLoading(true);
@@ -439,7 +441,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
     return () => controller.abort();
   }, [pageId, templateSearch]);
 
-  // â”€â”€ Load groups â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â"€â"€ Load groups â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   useEffect(() => {
     if (recipientMode !== "groups") return;
     setGroupsLoading(true);
@@ -453,15 +455,20 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
   // load contacts for Specific Contacts mode
   useEffect(() => {
     if (recipientMode !== "contacts" || !pageId) return;
-    setContactsLoading(true);
-    fetch(`/api/contacts?pageId=${encodeURIComponent(pageId)}&limit=100`)
-      .then(r => r.ok ? r.json() : null)
-      .then((d: { contacts?: ContactItem[] } | null) => { if (d?.contacts) setContactItems(d.contacts); })
-      .catch(() => {})
-      .finally(() => setContactsLoading(false));
-  }, [recipientMode, pageId]);
+    const timer = setTimeout(() => {
+      setContactsLoading(true);
+      const params = new URLSearchParams({ pageId, limit: "100" });
+      if (contactSearch) params.set("search", contactSearch);
+      fetch(`/api/contacts?${params.toString()}`)
+        .then(r => r.ok ? r.json() : null)
+        .then((d: { contacts?: ContactItem[] } | null) => { if (d?.contacts) setContactItems(d.contacts); })
+        .catch(() => {})
+        .finally(() => setContactsLoading(false));
+    }, contactSearch ? 300 : 0);
+    return () => clearTimeout(timer);
+  }, [recipientMode, pageId, contactSearch]);
 
-  // â”€â”€ Init field values when template changes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â"€â"€ Init field values when template changes â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   useEffect(() => {
     if (!selectedTemplate) { setFieldValues({}); return; }
     const vars = extractCustomVars(selectedTemplate.content);
@@ -472,12 +479,12 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
     });
   }, [selectedTemplate?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // â”€â”€ Clear when switching to custom â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â"€â"€ Clear when switching to custom â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   useEffect(() => {
     if (messageMode === "custom") { setSelectedTemplate(null); setFieldValues({}); }
   }, [messageMode]);
 
-  // â”€â”€ Live reachable count â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â"€â"€ Live reachable count â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const reachableTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!pageId) { setReachable(null); return; }
@@ -513,12 +520,25 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
   );
 
   // Audience counts derived from a single eligibility fetch:
-  // - UTILITY mode: works outside the 24-hour window â€” all contacts who have EVER messaged
+  // - UTILITY mode: works outside the 24-hour window – all contacts who have EVER messaged
   //   (windowOpen + windowClosed); neverMessaged still can't be reached (no PSID conversation)
   // - RESPONSE / standard template: requires 24-hour window to be open (windowOpen only)
   const utilityEligible  = (reachable?.windowOpen ?? 0) + (reachable?.windowClosed ?? 0);
   const standardReachable = reachable?.windowOpen ?? 0;
   const displayEligible   = messagingType === "utility" ? utilityEligible : standardReachable;
+
+  // Eligibility helper for the contact picker and confirm view
+  const isUtilityEligible = (c: ContactItem) =>
+    c.isSubscribed && /^\d{5,30}$/.test(c.metaUserId) && !!(c.relationshipVerifiedAt ?? c.lastMessageAt);
+  const selectedContactItems = recipientMode === "contacts"
+    ? contactItems.filter(c => selectedContacts.has(c.id)) : [];
+  const confirmIneligibleCount = messagingType === "utility" && recipientMode === "contacts"
+    ? selectedContactItems.filter(c => !isUtilityEligible(c)).length : 0;
+  const confirmRecipientLabel = recipientMode === "contacts"
+    ? `${selectedContacts.size} contact${selectedContacts.size !== 1 ? "s" : ""}`
+    : recipientMode === "groups"
+    ? `${selectedGroups.size} group${selectedGroups.size !== 1 ? "s" : ""}`
+    : "All subscribers";
 
   // Derive variables and preview
   const customVars = selectedTemplate ? extractCustomVars(selectedTemplate.content) : [];
@@ -566,7 +586,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
           body.templateId = selectedTemplate.id;
           body.fieldValues = fieldValues;
         } else {
-          // User template â€” pass id + field values; worker resolves per-recipient
+          // User template – pass id + field values; worker resolves per-recipient
           body.messageTemplateId = selectedTemplate.id;
           body.fieldValues = fieldValues;
         }
@@ -630,12 +650,109 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
         {/* Scrollable body */}
         <div className="flex-1 overflow-y-auto px-6 py-5 flex flex-col gap-5">
 
+          {/* Confirm view */}
+          {step === "confirm" && (
+            <div className="flex flex-col gap-5">
+              {/* Review header */}
+              <div className="flex items-center justify-between">
+                <h3 className="text-[15px] font-semibold" style={{ color: "#F5F7FA" }}>Review &amp; Confirm</h3>
+                <button onClick={() => setStep("compose")} className="flex items-center gap-1.5 text-[12px] font-medium px-3 py-1.5 rounded-lg"
+                  style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#C4CDD8" }}>
+                  <ArrowLeft size={12} /> Edit
+                </button>
+              </div>
+
+              {/* Summary card */}
+              <div className="rounded-xl p-4 flex flex-col gap-2.5 text-[13px]"
+                style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)" }}>
+                <div className="flex items-center gap-2">
+                  <span className="w-24 shrink-0 text-[11px] uppercase tracking-wider font-semibold" style={{ color: "#8B95A7" }}>Page</span>
+                  <span style={{ color: "#F5F7FA" }}>{pages.find(p => p.id === pageId)?.name ?? pageId}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-24 shrink-0 text-[11px] uppercase tracking-wider font-semibold" style={{ color: "#8B95A7" }}>Type</span>
+                  <span style={{ color: "#F5F7FA" }}>{messagingType === "utility" ? "Utility" : "Standard"}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-24 shrink-0 text-[11px] uppercase tracking-wider font-semibold" style={{ color: "#8B95A7" }}>Recipients</span>
+                  <span style={{ color: "#F5F7FA" }}>{confirmRecipientLabel}</span>
+                </div>
+                {selectedTemplate && (
+                  <div className="flex items-center gap-2">
+                    <span className="w-24 shrink-0 text-[11px] uppercase tracking-wider font-semibold" style={{ color: "#8B95A7" }}>Template</span>
+                    <span style={{ color: "#F5F7FA" }}>{selectedTemplate.name}</span>
+                  </div>
+                )}
+                {scheduleMode === "later" && schedDate && (
+                  <div className="flex items-center gap-2">
+                    <span className="w-24 shrink-0 text-[11px] uppercase tracking-wider font-semibold" style={{ color: "#8B95A7" }}>Scheduled</span>
+                    <span style={{ color: "#F5F7FA" }}>{new Date(schedDate).toLocaleString()}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Selected contacts list */}
+              {recipientMode === "contacts" && selectedContactItems.length > 0 && (
+                <div className="flex flex-col gap-1.5">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "#8B95A7" }}>Selected Recipients</p>
+                  <div className="flex flex-col gap-1 max-h-48 overflow-y-auto">
+                    {selectedContactItems.map(c => {
+                      const eligible = isUtilityEligible(c);
+                      return (
+                        <div key={c.id} className="flex items-center justify-between px-3 py-2 rounded-lg text-[12px]"
+                          style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                          <span style={{ color: "#F5F7FA" }}>{c.name ?? c.firstName ?? c.metaUserId}</span>
+                          {messagingType === "utility" && (
+                            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
+                              style={{ background: eligible ? "rgba(16,185,129,0.12)" : "rgba(239,68,68,0.1)", color: eligible ? "#10B981" : "#EF4444" }}>
+                              {eligible ? "Eligible" : "Ineligible"}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Message preview */}
+              {selectedTemplate && messageMode === "template" && (
+                <div className="flex flex-col gap-1.5">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "#8B95A7" }}>Message Preview</p>
+                  <div className="px-3 py-2.5 rounded-lg text-[13px]"
+                    style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)", color: "#C4CDD8", whiteSpace: "pre-wrap" }}>
+                    {selectedTemplate.content}
+                  </div>
+                </div>
+              )}
+
+              {/* Ineligibility warning */}
+              {confirmIneligibleCount > 0 && (
+                <div className="flex items-start gap-2 p-3 rounded-lg text-[12px]"
+                  style={{ background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.2)", color: "#F59E0B" }}>
+                  <AlertCircle size={13} className="mt-0.5 shrink-0" />
+                  <span>{confirmIneligibleCount} selected contact{confirmIneligibleCount !== 1 ? "s" : ""} may not be eligible for utility messages and will be skipped.</span>
+                </div>
+              )}
+
+              {/* Error */}
+              {error && (
+                <div className="flex items-start gap-2 p-3 rounded-lg text-[12px]"
+                  style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#EF4444" }}>
+                  <AlertCircle size={13} className="mt-0.5 shrink-0" /> {error}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Compose view */}
+          {step === "compose" && <>
           {/* â‘  Name */}
           <FormSection label="Broadcast Name">
             <input value={broadcastName} onChange={e => setBroadcastName(e.target.value)}
               placeholder="e.g. September Notification"
               className="w-full px-3 py-2.5 rounded-lg text-[13px] outline-none" style={FIELD_STYLE} />
-            <p className="text-[11px] mt-1" style={{ color: "#8B95A7" }}>Internal name â€” not visible to recipients.</p>
+            <p className="text-[11px] mt-1" style={{ color: "#8B95A7" }}>Internal name – not visible to recipients.</p>
           </FormSection>
 
           {/* â‘¡ Page + subscriber count */}
@@ -680,7 +797,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
 
                     {/* Mode-aware breakdown */}
                     {messagingType === "utility" ? (
-                      /* Utility mode â€” works outside 24h window; all who have ever messaged are eligible */
+                      /* Utility mode – works outside 24h window; all who have ever messaged are eligible */
                       <div className="rounded-lg p-2.5 flex flex-col gap-1.5"
                         style={{ background: "rgba(108,99,255,0.06)", border: "1px solid rgba(108,99,255,0.18)" }}>
                         <div className="flex items-center gap-1.5">
@@ -714,7 +831,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
                         )}
                       </div>
                     ) : (
-                      /* Standard mode â€” 24h window only */
+                      /* Standard mode – 24h window only */
                       <div className="grid grid-cols-2 gap-1.5 rounded-lg p-2.5"
                         style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)" }}>
                         <div className="flex items-center gap-1.5">
@@ -795,26 +912,54 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
               </div>
             )}
             {recipientMode === "contacts" && (
-              <div className="mt-2 rounded-lg overflow-hidden" style={{ border: "1px solid rgba(255,255,255,0.07)" }}>
-                {contactsLoading
-                  ? <div className="flex items-center gap-2 p-3 text-[12px]" style={{ color: "#8B95A7" }}><Loader2 size={12} className="animate-spin" /> Loading contacts...</div>
-                  : contactItems.length === 0
-                  ? <p className="p-3 text-[12px]" style={{ color: "#8B95A7" }}>No contacts found for this page.</p>
-                  : contactItems.map((c, i) => {
-                    const displayName = (c.name ?? [c.firstName, c.lastName].filter(Boolean).join(" ")) || c.metaUserId;
-                    return (
-                      <button key={c.id}
-                        onClick={() => setSelectedContacts(prev => { const n = new Set(prev); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n; })}
-                        className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-white/[0.02]"
-                        style={{ borderTop: i > 0 ? "1px solid rgba(255,255,255,0.05)" : "none" }}>
-                        <span className="text-[12.5px]" style={{ color: "#C4CDD8" }}>{displayName}</span>
-                        <div className="w-4 h-4 rounded flex items-center justify-center"
-                          style={{ background: selectedContacts.has(c.id) ? "#6C63FF" : "rgba(255,255,255,0.07)", border: `1px solid ${selectedContacts.has(c.id) ? "#6C63FF" : "rgba(255,255,255,0.15)"}` }}>
-                          {selectedContacts.has(c.id) && <CheckCircle2 size={10} style={{ color: "#fff" }} />}
-                        </div>
-                      </button>
-                    );
-                  })}
+              <div className="mt-2 flex flex-col gap-2">
+                {/* Search + selected count */}
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Search size={11} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: "#8B95A7" }} />
+                    <input
+                      value={contactSearch}
+                      onChange={e => setContactSearch(e.target.value)}
+                      placeholder="Search contacts…"
+                      className="w-full pl-7 pr-2.5 py-1.5 rounded-lg text-[12px] outline-none"
+                      style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" }}
+                    />
+                  </div>
+                  {selectedContacts.size > 0 && (
+                    <span className="text-[11px] font-semibold px-2 py-1 rounded-full shrink-0"
+                      style={{ background: "rgba(108,99,255,0.15)", color: "#8B85FF", border: "1px solid rgba(108,99,255,0.3)" }}>
+                      {selectedContacts.size} selected
+                    </span>
+                  )}
+                </div>
+                <div className="rounded-lg overflow-hidden" style={{ border: "1px solid rgba(255,255,255,0.07)" }}>
+                  {contactsLoading
+                    ? <div className="flex items-center gap-2 p-3 text-[12px]" style={{ color: "#8B95A7" }}><Loader2 size={12} className="animate-spin" /> Loading contacts…</div>
+                    : contactItems.length === 0
+                    ? <p className="p-3 text-[12px]" style={{ color: "#8B95A7" }}>{contactSearch ? "No contacts match your search." : "No contacts found for this page."}</p>
+                    : contactItems.map((c, i) => {
+                      const displayName = (c.name ?? [c.firstName, c.lastName].filter(Boolean).join(" ")) || c.metaUserId;
+                      const eligible = messagingType === "utility" ? isUtilityEligible(c) : true;
+                      return (
+                        <button key={c.id}
+                          onClick={() => setSelectedContacts(prev => { const n = new Set(prev); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n; })}
+                          className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-white/[0.02]"
+                          style={{ borderTop: i > 0 ? "1px solid rgba(255,255,255,0.05)" : "none" }}>
+                          <div className="w-4 h-4 rounded shrink-0 flex items-center justify-center"
+                            style={{ background: selectedContacts.has(c.id) ? "#6C63FF" : "rgba(255,255,255,0.07)", border: `1px solid ${selectedContacts.has(c.id) ? "#6C63FF" : "rgba(255,255,255,0.15)"}` }}>
+                            {selectedContacts.has(c.id) && <CheckCircle2 size={10} style={{ color: "#fff" }} />}
+                          </div>
+                          <span className="flex-1 text-left text-[12.5px] truncate" style={{ color: "#C4CDD8" }}>{displayName}</span>
+                          {messagingType === "utility" && (
+                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0"
+                              style={{ background: eligible ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.08)", color: eligible ? "#10B981" : "#8B95A7" }}>
+                              {eligible ? "Eligible" : "Ineligible"}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                </div>
               </div>
             )}
           </FormSection>
@@ -886,12 +1031,12 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
                   </div>
                 </div>
 
-                {/* Variable fields â€” shown when template selected */}
+                {/* Variable fields – shown when template selected */}
                 {selectedTemplate && (
                   <div className="flex flex-col gap-1 pt-4" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
                     <div className="flex items-center justify-between mb-2">
                       <p className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "#8B95A7" }}>
-                        {selectedTemplate.name} â€” Variable Values
+                        {selectedTemplate.name} – Variable Values
                       </p>
                       <button onClick={() => setSelectedTemplate(null)} className="text-[10.5px] flex items-center gap-1" style={{ color: "#8B95A7" }}>
                         <X size={10} /> Clear
@@ -903,13 +1048,13 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
                       <div className="flex items-start gap-2 p-2.5 rounded-lg mb-2 text-[11.5px]"
                         style={{ background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.15)", color: "#10B981" }}>
                         <CheckCircle2 size={12} className="mt-0.5 shrink-0" />
-                        <span>Contact variables like <code className="font-mono">{"{{first_name}}"}</code> are auto-filled per recipient â€” no input needed.</span>
+                        <span>Contact variables like <code className="font-mono">{"{{first_name}}"}</code> are auto-filled per recipient – no input needed.</span>
                       </div>
                     )}
 
                     {/* One input per positional variable */}
                     {customVars.length === 0 ? (
-                      <p className="text-[12px] py-2 text-center" style={{ color: "#8B95A7" }}>No variable fields â€” this template has fixed text.</p>
+                      <p className="text-[12px] py-2 text-center" style={{ color: "#8B95A7" }}>No variable fields – this template has fixed text.</p>
                     ) : (
                       customVars.map(varKey => {
                         const fieldDef = selectedTemplate?.fields?.find(f => f.key === varKey);
@@ -1017,7 +1162,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
             <div className="flex gap-2">
               {([
                 ["response", "Standard Response",   "Requires active 24-hour window"] as const,
-                ["utility",  "Utility Notification", "messaging_type: UTILITY â€” outside 24h window"] as const,
+                ["utility",  "Utility Notification", "messaging_type: UTILITY – outside 24h window"] as const,
               ]).map(([m, lbl, sub]) => (
                 <button key={m}
                   onClick={() => { setMessagingType(m); }}
@@ -1042,7 +1187,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
                     <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-[11px]"
                       style={{ background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.2)", color: "#10B981" }}>
                       <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "#10B981" }} />
-                      Template registered and approved by Meta â€” ready to send as utility message.
+                      Template registered and approved by Meta – ready to send as utility message.
                     </div>
                   ) : liveTemplate?.isUtility && liveTemplate?.metaTemplateStatus && liveTemplate?.metaTemplateStatus !== "APPROVED" ? (
                     <div className="flex items-start gap-2 p-2.5 rounded-lg text-[11px]"
@@ -1066,7 +1211,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
                   <div className="flex items-start gap-2 p-2.5 rounded-lg text-[11px]"
                     style={{ background: "rgba(108,99,255,0.06)", border: "1px solid rgba(108,99,255,0.15)", color: "#8B95A7" }}>
                     <AlertCircle size={11} className="mt-0.5 shrink-0" />
-                    <span>Select a utility template above. Utility messages require a pre-approved Meta template â€” transactional content only (order confirmations, delivery updates, appointment reminders). No promotional content.</span>
+                    <span>Select a utility template above. Utility messages require a pre-approved Meta template – transactional content only (order confirmations, delivery updates, appointment reminders). No promotional content.</span>
                   </div>
                 )}
               </div>
@@ -1099,38 +1244,45 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
               <AlertCircle size={13} className="mt-0.5 shrink-0" /> {error}
             </div>
           )}
+          </>}
         </div>
 
         {/* Footer */}
         <div className="px-6 py-4 flex items-center gap-3 shrink-0"
           style={{ borderTop: "1px solid rgba(255,255,255,0.07)" }}>
-          <button onClick={() => handleSend("draft")} disabled={submitting || !broadcastName.trim()}
-            className="px-4 py-2.5 rounded-xl text-[13px] font-medium"
-            style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: !broadcastName.trim() ? "#8B95A7" : "#F5F7FA", opacity: !broadcastName.trim() ? 0.5 : 1 }}>
-            Save Draft
-          </button>
-          <button onClick={() => handleSend("send")} disabled={submitting || !canSend}
-            className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold text-white"
-            style={{ background: "#6C63FF", opacity: (submitting || !canSend) ? 0.5 : 1 }}>
-            {submitting
-              ? <><Loader2 size={14} className="animate-spin" /> {scheduleMode === "later" ? "Schedulingâ€¦" : "Sendingâ€¦"}</>
-              : scheduleMode === "later"
-              ? <><Send size={14} /> {messagingType === "utility" ? "Schedule Utility Message" : "Schedule Broadcast"}</>
-              : <>
-                  <Send size={14} /> {messagingType === "utility" ? "Send Utility Message" : "Send Now"}
-                  {reachableLoading
-                    ? <span className="ml-1 opacity-60 text-[12px] font-normal">â€” countingâ€¦</span>
-                    : reachable !== null
-                    ? displayEligible > 0
-                      ? <span className="ml-1 text-[12px] font-normal">
-                          â€” ðŸ”¥ <strong style={{ fontWeight: 700 }}>{displayEligible.toLocaleString()} Reachable</strong>
-                        </span>
-                      : <span className="ml-1 text-[12px] font-normal" style={{ opacity: 0.65 }}>
-                          â€” <strong style={{ fontWeight: 700 }}>0 Reachable</strong>
-                        </span>
-                    : null}
-                </>}
-          </button>
+          {step === "compose" ? (
+            <>
+              <button onClick={() => handleSend("draft")} disabled={submitting || !broadcastName.trim()}
+                className="px-4 py-2.5 rounded-xl text-[13px] font-medium"
+                style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: !broadcastName.trim() ? "#8B95A7" : "#F5F7FA", opacity: !broadcastName.trim() ? 0.5 : 1 }}>
+                Save Draft
+              </button>
+              <button onClick={() => setStep("confirm")} disabled={!canSend}
+                className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold text-white"
+                style={{ background: "#6C63FF", opacity: !canSend ? 0.5 : 1 }}>
+                <Send size={14} /> {scheduleMode === "later"
+                  ? `Review Schedule${recipientMode === "contacts" && selectedContacts.size > 0 ? ` (${selectedContacts.size})` : ""}`
+                  : `Review & Send${recipientMode === "contacts" && selectedContacts.size > 0 ? ` (${selectedContacts.size})` : ""}`}
+              </button>
+            </>
+          ) : (
+            <>
+              <button onClick={() => setStep("compose")}
+                className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-[13px] font-medium"
+                style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#C4CDD8" }}>
+                <ArrowLeft size={13} /> Back
+              </button>
+              <button onClick={() => handleSend("send")} disabled={submitting || !canSend}
+                className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold text-white"
+                style={{ background: "#6C63FF", opacity: (submitting || !canSend) ? 0.5 : 1 }}>
+                {submitting
+                  ? <><Loader2 size={14} className="animate-spin" /> {scheduleMode === "later" ? "Scheduling…" : "Sending…"}</>
+                  : scheduleMode === "later"
+                  ? <><Send size={14} /> Confirm &amp; Schedule</>
+                  : <><Send size={14} /> Confirm &amp; Send to {confirmRecipientLabel}</>}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -1146,7 +1298,7 @@ function FormSection({ label, children }: { label: string; children: React.React
   );
 }
 
-// â”€â”€ Main Page â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Main Page â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 export default function BroadcastsPage() {
   const { pages } = useWorkspace();

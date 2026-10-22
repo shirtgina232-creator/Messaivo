@@ -40,11 +40,6 @@ export async function GET(req: Request) {
       ...workspaceTemplates.map(t => ({ ...t, source: "workspace" as const, isUtility: false, metaTemplateName: null, metaTemplateStatus: null, registeredForPageId: null })),
     ];
 
-    // TEMP TRACE — remove after confirming fix
-    const stU = templates.find(t => t.name === "Support Ticket Update");
-    if (stU) console.log(`[broadcast-templates] pageId=${pageId ?? "(none)"} stu: isUtility=${stU.isUtility} metaTemplateStatus=${stU.metaTemplateStatus} registeredForPageId=${stU.registeredForPageId}`);
-    else console.log(`[broadcast-templates] pageId=${pageId ?? "(none)"} stu: not found in response (registrations=${registrations.length})`);
-
     return ok({ templates });
   } catch (e) {
     console.error("[GET /api/broadcast-templates]", e);
