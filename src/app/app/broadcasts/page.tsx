@@ -426,26 +426,18 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
 
   // â”€â”€ Load templates â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   useEffect(() => {
+    const controller = new AbortController();
     setTemplatesLoading(true);
     const params = new URLSearchParams();
     if (pageId) params.set("pageId", pageId);
     if (templateSearch) params.set("search", templateSearch);
-    fetch(`/api/broadcast-templates?${params.toString()}`)
+    fetch(`/api/broadcast-templates?${params.toString()}`, { signal: controller.signal })
       .then(r => r.ok ? r.json() : null)
       .then((d: { templates?: AvailableTemplate[] } | null) => { if (d?.templates) setTemplates(d.templates); })
       .catch(() => {})
       .finally(() => setTemplatesLoading(false));
+    return () => controller.abort();
   }, [pageId, templateSearch]);
-
-  // Keep selectedTemplate in sync when templates refresh (e.g. after page change).
-  // Uses a functional updater so selectedTemplate is not a dep -- no loop risk.
-  useEffect(() => {
-    setSelectedTemplate(prev => {
-      if (!prev) return prev;
-      const fresh = templates.find(t => t.id === prev.id);
-      return fresh ?? prev;
-    });
-  }, [templates]);
 
   // â”€â”€ Load groups â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   useEffect(() => {
@@ -542,11 +534,17 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
 
   const allRequiredFilled = customVars.every(v => (fieldValues[v] ?? "").trim() !== "");
 
+  // Derive live registration fields from the current templates array so stale snapshots
+  // never cause a false "not a utility template" error while a fetch is in-flight.
+  const liveTemplate = selectedTemplate
+    ? (templates.find(t => t.id === selectedTemplate.id) ?? selectedTemplate)
+    : null;
+
   // For utility mode, the selected template must be registered & approved with Meta for this page
   const utilityTemplateReady = messagingType === "utility"
-    ? (selectedTemplate?.isUtility === true &&
-       selectedTemplate?.metaTemplateStatus === "APPROVED" &&
-       (!selectedTemplate?.registeredForPageId || selectedTemplate.registeredForPageId === pageId))
+    ? (liveTemplate?.isUtility === true &&
+       liveTemplate?.metaTemplateStatus === "APPROVED" &&
+       (!liveTemplate?.registeredForPageId || liveTemplate.registeredForPageId === pageId))
     : true;
 
   const canSend = !!pageId && !!broadcastName.trim() &&
@@ -1038,26 +1036,26 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
               <div className="mt-3 flex flex-col gap-2">
                 {/* Show registration status of the selected template */}
                 {selectedTemplate && messageMode === "template" && (
-                  selectedTemplate.isUtility && selectedTemplate.metaTemplateStatus === "APPROVED" &&
-                  (!selectedTemplate.registeredForPageId || selectedTemplate.registeredForPageId === pageId)
+                  liveTemplate?.isUtility && liveTemplate?.metaTemplateStatus === "APPROVED" &&
+                  (!liveTemplate?.registeredForPageId || liveTemplate?.registeredForPageId === pageId)
                   ? (
                     <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-[11px]"
                       style={{ background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.2)", color: "#10B981" }}>
                       <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "#10B981" }} />
                       Template registered and approved by Meta â€” ready to send as utility message.
                     </div>
-                  ) : selectedTemplate.isUtility && selectedTemplate.metaTemplateStatus && selectedTemplate.metaTemplateStatus !== "APPROVED" ? (
+                  ) : liveTemplate?.isUtility && liveTemplate?.metaTemplateStatus && liveTemplate?.metaTemplateStatus !== "APPROVED" ? (
                     <div className="flex items-start gap-2 p-2.5 rounded-lg text-[11px]"
                       style={{ background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.2)", color: "#F59E0B" }}>
                       <AlertCircle size={11} className="mt-0.5 shrink-0" />
-                      <span>Template status: <strong>{selectedTemplate.metaTemplateStatus}</strong>. Wait for Meta approval before sending.</span>
+                      <span>Template status: <strong>{liveTemplate?.metaTemplateStatus}</strong>. Wait for Meta approval before sending.</span>
                     </div>
                   ) : (
                     <div className="flex items-start gap-2 p-2.5 rounded-lg text-[11px]"
                       style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.15)", color: "#EF4444" }}>
                       <AlertCircle size={11} className="mt-0.5 shrink-0" />
                       <span>
-                        {selectedTemplate.isUtility
+                        {liveTemplate?.isUtility
                           ? "This template is not yet registered with Meta for the selected page. Ask an admin to register it."
                           : "Selected template is not a utility template. Choose a utility template, or ask an admin to register one."}
                       </span>
