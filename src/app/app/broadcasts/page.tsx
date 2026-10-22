@@ -427,12 +427,15 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
   // â”€â”€ Load templates â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   useEffect(() => {
     setTemplatesLoading(true);
-    fetch(`/api/broadcast-templates?${templateSearch ? `search=${encodeURIComponent(templateSearch)}` : ""}`)
+    const params = new URLSearchParams();
+    if (pageId) params.set("pageId", pageId);
+    if (templateSearch) params.set("search", templateSearch);
+    fetch(`/api/broadcast-templates?${params.toString()}`)
       .then(r => r.ok ? r.json() : null)
       .then((d: { templates?: AvailableTemplate[] } | null) => { if (d?.templates) setTemplates(d.templates); })
       .catch(() => {})
       .finally(() => setTemplatesLoading(false));
-  }, [templateSearch]);
+  }, [pageId, templateSearch]);
 
   // â”€â”€ Load groups â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   useEffect(() => {
