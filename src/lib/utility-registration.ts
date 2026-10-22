@@ -15,13 +15,13 @@ export async function verifyPageGrant(page: FacebookPage, utility = true) {
     const appId = process.env.META_APP_ID;
     const secret = process.env.META_APP_SECRET;
     if (!appId || !secret) throw new Error("Meta app credentials are missing");
-    const [identity, debug] = await Promise.all([
-      graphRequest(token, "/me?fields=id"),
-      graphRequest(appId + "|" + secret, "/debug_token?input_token=" + encodeURIComponent(token)),
-    ]);
+    // Use app-level introspection only. /me?fields=id with a Page token requires
+    // pages_read_engagement on v26.0 but adds nothing over debug_token.profile_id,
+    // which is returned by the app-credential call and needs no user-granted scope.
+    const debug = await graphRequest(appId + "|" + secret, "/debug_token?input_token=" + encodeURIComponent(token));
     const data = debug.data;
     const now = Math.floor(Date.now() / 1000);
-    if (identity.id !== page.pageId || !data?.is_valid || String(data.app_id) !== appId ||
+    if (String(data?.profile_id) !== page.pageId || !data?.is_valid || String(data.app_id) !== appId ||
       (data.expires_at && data.expires_at <= now) || (data.data_access_expires_at && data.data_access_expires_at <= now)) throw new Error("Invalid, expired, or wrong-Page access token; reconnect this Page");
     const allowed = (scope: string) => {
       if (!data.scopes?.includes(scope)) return false;
