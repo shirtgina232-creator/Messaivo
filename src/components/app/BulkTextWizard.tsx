@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   X, ChevronRight, ChevronLeft, Users, FileText, Eye, CheckCircle2,
   Send, Loader2, AlertCircle, RefreshCw, ArrowRight, ExternalLink,
-  Zap, Check,
+  Zap, Check, Search,
 } from "lucide-react";
 import { templateKeys, isPositionalKeys } from "@/lib/messaging-policy";
 
@@ -31,6 +31,17 @@ interface EligibilityResult {
   windowClosed: number;
   neverMessaged: number;
   unsubscribed: number;
+}
+
+interface ContactItem {
+  id: string;
+  name: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  metaUserId: string;
+  isSubscribed: boolean;
+  lastMessageAt: string | null;
+  relationshipVerifiedAt: string | null;
 }
 
 interface ProgressData {
@@ -107,6 +118,10 @@ function extractCustomVars(content: string): string[] {
   return [...seen];
 }
 
+function isUtilityEligible(c: ContactItem): boolean {
+  return c.isSubscribed && /^\d{5,30}$/.test(c.metaUserId) && !!(c.relationshipVerifiedAt ?? c.lastMessageAt);
+}
+
 const CARD_STYLE = {
   background: "rgba(255,255,255,0.025)",
   border: "1px solid rgba(255,255,255,0.07)",
@@ -147,14 +162,24 @@ function StepBar({ step }: { step: number }) {
 
 // ── Step 1: Select Page ───────────────────────────────────────────────────────
 
-function Step1Page({ pages, selectedId, onSelect, eligibility, loading }: {
+function Step1Page({ pages, selectedId, onSelect, eligibility, loading, recipientMode, onRecipientModeChange, contacts, contactsLoading, contactSearch, onContactSearchChange, selectedContacts, onToggleContact, onClearContacts }: {
   pages: Page[];
   selectedId: string;
   onSelect: (id: string) => void;
   eligibility: EligibilityResult | null;
   loading: boolean;
+  recipientMode: "all" | "contacts";
+  onRecipientModeChange: (m: "all" | "contacts") => void;
+  contacts: ContactItem[];
+  contactsLoading: boolean;
+  contactSearch: string;
+  onContactSearchChange: (s: string) => void;
+  selectedContacts: Set<string>;
+  onToggleContact: (id: string) => void;
+  onClearContacts: () => void;
 }) {
   const utilityEligible = (eligibility?.windowOpen ?? 0) + (eligibility?.windowClosed ?? 0);
+  const selectedEligibleCount = contacts.filter(c => selectedContacts.has(c.id) && isUtilityEligible(c)).length;
   return (
     <div className="flex flex-col gap-4">
       <div>
@@ -190,61 +215,149 @@ function Step1Page({ pages, selectedId, onSelect, eligibility, loading }: {
       </div>
 
       {selectedId && (
-        <div className="rounded-xl p-4" style={{ background: "rgba(108,99,255,0.06)", border: "1px solid rgba(108,99,255,0.18)" }}>
-          {loading ? (
-            <div className="flex items-center gap-2 text-[12px]" style={{ color: "#8B95A7" }}>
-              <Loader2 size={12} className="animate-spin" /> Counting eligible recipients…
-            </div>
-          ) : eligibility ? (
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center gap-2">
-                <Users size={13} style={{ color: "#8B85FF" }} />
-                <span className="text-[12px] font-semibold" style={{ color: "#F5F7FA" }}>
-                  {eligibility.total.toLocaleString()} total contacts
-                </span>
-              </div>
-              <div className="grid grid-cols-2 gap-2 mt-1">
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: "#6C63FF" }} />
-                  <span className="text-[11.5px]" style={{ color: "#C4CDD8" }}>
-                    <strong style={{ color: "#8B85FF", fontSize: 14 }}>{utilityEligible.toLocaleString()}</strong>
-                    {" "}eligible for utility
-                  </span>
+        <>
+          {/* Recipient mode toggle */}
+          <div className="flex gap-2">
+            {(["all", "contacts"] as const).map(m => (
+              <button key={m} onClick={() => onRecipientModeChange(m)}
+                className="flex-1 py-2 rounded-lg text-[12.5px] font-semibold transition-colors"
+                style={{
+                  background: recipientMode === m ? "rgba(108,99,255,0.15)" : "rgba(255,255,255,0.03)",
+                  border: `1px solid ${recipientMode === m ? "rgba(108,99,255,0.4)" : "rgba(255,255,255,0.07)"}`,
+                  color: recipientMode === m ? "#8B85FF" : "#8B95A7",
+                }}>
+                {m === "all" ? "All Contacts" : "Specific Contacts"}
+              </button>
+            ))}
+          </div>
+
+          {/* All contacts: eligibility summary */}
+          {recipientMode === "all" && (
+            <div className="rounded-xl p-4" style={{ background: "rgba(108,99,255,0.06)", border: "1px solid rgba(108,99,255,0.18)" }}>
+              {loading ? (
+                <div className="flex items-center gap-2 text-[12px]" style={{ color: "#8B95A7" }}>
+                  <Loader2 size={12} className="animate-spin" /> Counting eligible recipients…
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: "#10B981" }} />
-                  <span className="text-[11.5px]" style={{ color: "#C4CDD8" }}>
-                    <strong style={{ color: "#10B981" }}>{eligibility.windowOpen.toLocaleString()}</strong>
-                    {" "}in 24h window
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: "#F59E0B" }} />
-                  <span className="text-[11.5px]" style={{ color: "#C4CDD8" }}>
-                    <strong style={{ color: "#F59E0B" }}>{eligibility.windowClosed.toLocaleString()}</strong>
-                    {" "}outside 24h window
-                  </span>
-                </div>
-                {(eligibility.neverMessaged + eligibility.unsubscribed) > 0 && (
+              ) : eligibility ? (
+                <div className="flex flex-col gap-2">
                   <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full shrink-0" style={{ background: "#8B95A7" }} />
-                    <span className="text-[11.5px]" style={{ color: "#C4CDD8" }}>
-                      <strong style={{ color: "#8B95A7" }}>
-                        {(eligibility.neverMessaged + eligibility.unsubscribed).toLocaleString()}
-                      </strong>
-                      {" "}excluded
+                    <Users size={13} style={{ color: "#8B85FF" }} />
+                    <span className="text-[12px] font-semibold" style={{ color: "#F5F7FA" }}>
+                      {eligibility.total.toLocaleString()} total contacts
                     </span>
                   </div>
-                )}
-              </div>
-              {utilityEligible === 0 && (
-                <p className="text-[11.5px] mt-1" style={{ color: "#F59E0B" }}>
-                  No eligible contacts yet. Contacts become eligible after they send a message to this page.
-                </p>
-              )}
+                  <div className="grid grid-cols-2 gap-2 mt-1">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: "#6C63FF" }} />
+                      <span className="text-[11.5px]" style={{ color: "#C4CDD8" }}>
+                        <strong style={{ color: "#8B85FF", fontSize: 14 }}>{utilityEligible.toLocaleString()}</strong>
+                        {" "}eligible for utility
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: "#10B981" }} />
+                      <span className="text-[11.5px]" style={{ color: "#C4CDD8" }}>
+                        <strong style={{ color: "#10B981" }}>{eligibility.windowOpen.toLocaleString()}</strong>
+                        {" "}in 24h window
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: "#F59E0B" }} />
+                      <span className="text-[11.5px]" style={{ color: "#C4CDD8" }}>
+                        <strong style={{ color: "#F59E0B" }}>{eligibility.windowClosed.toLocaleString()}</strong>
+                        {" "}outside 24h window
+                      </span>
+                    </div>
+                    {(eligibility.neverMessaged + eligibility.unsubscribed) > 0 && (
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full shrink-0" style={{ background: "#8B95A7" }} />
+                        <span className="text-[11.5px]" style={{ color: "#C4CDD8" }}>
+                          <strong style={{ color: "#8B95A7" }}>
+                            {(eligibility.neverMessaged + eligibility.unsubscribed).toLocaleString()}
+                          </strong>
+                          {" "}excluded
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                  {utilityEligible === 0 && (
+                    <p className="text-[11.5px] mt-1" style={{ color: "#F59E0B" }}>
+                      No eligible contacts yet. Contacts become eligible after they send a message to this page.
+                    </p>
+                  )}
+                </div>
+              ) : null}
             </div>
-          ) : null}
-        </div>
+          )}
+
+          {/* Specific contacts: search + list */}
+          {recipientMode === "contacts" && (
+            <div className="flex flex-col gap-3">
+              <div className="relative">
+                <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#8B95A7" }} />
+                <input
+                  value={contactSearch}
+                  onChange={e => onContactSearchChange(e.target.value)}
+                  placeholder="Search contacts…"
+                  className="w-full pl-8 pr-3 py-2.5 rounded-lg text-[13px] outline-none"
+                  style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" }}
+                />
+              </div>
+
+              {selectedContacts.size > 0 && (
+                <div className="flex items-center justify-between px-3 py-2 rounded-lg"
+                  style={{ background: "rgba(108,99,255,0.08)", border: "1px solid rgba(108,99,255,0.2)" }}>
+                  <span className="text-[12px]" style={{ color: "#8B85FF" }}>
+                    {selectedContacts.size} selected · {selectedEligibleCount} utility eligible
+                  </span>
+                  <button onClick={onClearContacts} className="text-[11px]" style={{ color: "#8B95A7" }}>
+                    Clear
+                  </button>
+                </div>
+              )}
+
+              <div className="flex flex-col gap-1.5 max-h-64 overflow-y-auto">
+                {contactsLoading ? (
+                  <div className="flex items-center justify-center gap-2 py-6 text-[12px]" style={{ color: "#8B95A7" }}>
+                    <Loader2 size={12} className="animate-spin" /> Loading contacts…
+                  </div>
+                ) : contacts.length === 0 ? (
+                  <p className="text-[12px] py-4 text-center" style={{ color: "#8B95A7" }}>No contacts found.</p>
+                ) : contacts.map(c => {
+                  const eligible = isUtilityEligible(c);
+                  const sel = selectedContacts.has(c.id);
+                  const displayName = (c.name ?? [c.firstName, c.lastName].filter(Boolean).join(" ")) || c.metaUserId;
+                  return (
+                    <button key={c.id} onClick={() => onToggleContact(c.id)}
+                      className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-colors"
+                      style={{
+                        background: sel ? "rgba(108,99,255,0.1)" : "rgba(255,255,255,0.02)",
+                        border: `1px solid ${sel ? "rgba(108,99,255,0.35)" : "rgba(255,255,255,0.06)"}`,
+                        opacity: eligible ? 1 : 0.5,
+                      }}>
+                      <div className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0"
+                        style={{ background: sel ? "#6C63FF" : "rgba(255,255,255,0.07)", color: "#fff" }}>
+                        {sel ? <Check size={11} /> : displayName.slice(0, 1).toUpperCase()}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[12.5px] font-medium truncate" style={{ color: "#F5F7FA" }}>{displayName}</p>
+                        <p className="text-[10.5px] truncate" style={{ color: "#8B95A7" }}>PSID: {c.metaUserId}</p>
+                      </div>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold shrink-0"
+                        style={{
+                          background: eligible ? "rgba(16,185,129,0.1)" : "rgba(139,149,167,0.08)",
+                          color: eligible ? "#10B981" : "#8B95A7",
+                          border: `1px solid ${eligible ? "rgba(16,185,129,0.2)" : "rgba(139,149,167,0.15)"}`,
+                        }}>
+                        {eligible ? "Eligible" : "Ineligible"}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -481,11 +594,12 @@ function Step3Preview({ template, page, eligibleCount, broadcastName, onNameChan
 
 // ── Step 4: Confirm ───────────────────────────────────────────────────────────
 
-function Step4Confirm({ page, template, eligibleCount, totalCount }: {
+function Step4Confirm({ page, template, eligibleCount, totalCount, recipientMode }: {
   page: Page;
   template: UtilityTemplate;
   eligibleCount: number;
   totalCount: number;
+  recipientMode: "all" | "contacts";
 }) {
   const excluded = Math.max(0, totalCount - eligibleCount);
   return (
@@ -516,18 +630,27 @@ function Step4Confirm({ page, template, eligibleCount, totalCount }: {
           <Users size={14} style={{ color: "#8B85FF" }} />
           <p className="text-[12px] font-semibold" style={{ color: "#8B95A7" }}>Recipient Summary</p>
         </div>
-        <div className="flex items-center justify-between">
-          <span className="text-[13px]" style={{ color: "#C4CDD8" }}>Total contacts on page</span>
-          <span className="text-[14px] font-bold tabular-nums" style={{ color: "#F5F7FA" }}>
-            {totalCount.toLocaleString()}
-          </span>
-        </div>
-        <div className="flex items-center justify-between">
-          <span className="text-[13px]" style={{ color: "#C4CDD8" }}>Excluded (never messaged / unsubscribed)</span>
-          <span className="text-[14px] font-bold tabular-nums" style={{ color: "#8B95A7" }}>
-            {excluded.toLocaleString()}
-          </span>
-        </div>
+        {recipientMode === "all" ? (
+          <>
+            <div className="flex items-center justify-between">
+              <span className="text-[13px]" style={{ color: "#C4CDD8" }}>Total contacts on page</span>
+              <span className="text-[14px] font-bold tabular-nums" style={{ color: "#F5F7FA" }}>
+                {totalCount.toLocaleString()}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-[13px]" style={{ color: "#C4CDD8" }}>Excluded (never messaged / unsubscribed)</span>
+              <span className="text-[14px] font-bold tabular-nums" style={{ color: "#8B95A7" }}>
+                {excluded.toLocaleString()}
+              </span>
+            </div>
+          </>
+        ) : (
+          <div className="flex items-center justify-between">
+            <span className="text-[13px]" style={{ color: "#C4CDD8" }}>Sending to</span>
+            <span className="text-[13px] font-medium" style={{ color: "#8B85FF" }}>Specific contacts</span>
+          </div>
+        )}
         <div className="h-px" style={{ background: "rgba(108,99,255,0.2)" }} />
         <div className="flex items-center justify-between">
           <span className="text-[14px] font-semibold" style={{ color: "#8B85FF" }}>Will receive this message</span>
@@ -693,6 +816,11 @@ export default function BulkTextWizard({ pages, onClose, onSent }: {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [createdBroadcastId, setCreatedBroadcastId] = useState<string | null>(null);
+  const [recipientMode, setRecipientMode] = useState<"all" | "contacts">("all");
+  const [selectedContacts, setSelectedContacts] = useState<Set<string>>(new Set());
+  const [contactItems, setContactItems] = useState<ContactItem[]>([]);
+  const [contactsLoading, setContactsLoading] = useState(false);
+  const [contactSearch, setContactSearch] = useState("");
 
   const selectedPage = pages.find(p => p.id === pageId) ?? null;
 
@@ -715,6 +843,22 @@ export default function BulkTextWizard({ pages, onClose, onSent }: {
     return () => clearTimeout(t);
   }, [pageId]);
 
+  // Fetch contacts when in specific-contacts mode
+  useEffect(() => {
+    if (recipientMode !== "contacts" || !pageId) return;
+    const t = setTimeout(() => {
+      setContactsLoading(true);
+      const params = new URLSearchParams({ pageId, limit: "100" });
+      if (contactSearch) params.set("search", contactSearch);
+      fetch(`/api/contacts?${params}`)
+        .then(r => r.ok ? r.json() : null)
+        .then((d: { contacts?: ContactItem[] } | null) => { if (d?.contacts) setContactItems(d.contacts); })
+        .catch(() => {})
+        .finally(() => setContactsLoading(false));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [recipientMode, pageId, contactSearch]);
+
   // Auto-generate broadcast name when template/page selected
   useEffect(() => {
     if (!template || !selectedPage) return;
@@ -725,7 +869,9 @@ export default function BulkTextWizard({ pages, onClose, onSent }: {
     return () => clearTimeout(t);
   }, [template?.id, selectedPage?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const utilityEligible = (eligibility?.windowOpen ?? 0) + (eligibility?.windowClosed ?? 0);
+  const utilityEligible = recipientMode === "contacts"
+    ? contactItems.filter(c => selectedContacts.has(c.id) && isUtilityEligible(c)).length
+    : (eligibility?.windowOpen ?? 0) + (eligibility?.windowClosed ?? 0);
 
   // Reset field values when the selected template changes
   const handleTemplateSelect = useCallback((t: UtilityTemplate) => {
@@ -734,7 +880,7 @@ export default function BulkTextWizard({ pages, onClose, onSent }: {
   }, []);
 
   const canAdvance = (() => {
-    if (step === 0) return !!pageId;
+    if (step === 0) return !!pageId && (recipientMode === "all" || selectedContacts.size > 0);
     if (step === 1) return !!template;
     if (step === 2) {
       if (!broadcastName.trim()) return false;
@@ -756,13 +902,13 @@ export default function BulkTextWizard({ pages, onClose, onSent }: {
     setSubmitting(true); setSubmitError("");
     try {
       // Create broadcast with utility template
-      const body = {
+      const body: Record<string, unknown> = {
         name: broadcastName.trim(),
         pageId,
         templateId: template.id,
         messagingType: "utility",
-        allPageContacts: true,
         fieldValues,
+        ...(recipientMode === "contacts" ? { contactIds: [...selectedContacts] } : { allPageContacts: true }),
       };
       const res = await fetch("/api/broadcasts", {
         method: "POST",
@@ -790,7 +936,7 @@ export default function BulkTextWizard({ pages, onClose, onSent }: {
     } finally {
       setSubmitting(false);
     }
-  }, [pageId, template, broadcastName, onSent]);
+  }, [pageId, template, broadcastName, fieldValues, recipientMode, selectedContacts, onSent]);
 
   return (
     <div className="fixed inset-0 z-50 flex">
@@ -833,9 +979,22 @@ export default function BulkTextWizard({ pages, onClose, onSent }: {
             <Step1Page
               pages={pages}
               selectedId={pageId}
-              onSelect={id => { setPageId(id); setTemplate(null); setFieldValues({}); }}
+              onSelect={id => { setPageId(id); setTemplate(null); setFieldValues({}); setSelectedContacts(new Set()); }}
               eligibility={eligibility}
               loading={eligibilityLoading}
+              recipientMode={recipientMode}
+              onRecipientModeChange={m => { setRecipientMode(m); setSelectedContacts(new Set()); setContactSearch(""); }}
+              contacts={contactItems}
+              contactsLoading={contactsLoading}
+              contactSearch={contactSearch}
+              onContactSearchChange={setContactSearch}
+              selectedContacts={selectedContacts}
+              onToggleContact={id => setSelectedContacts(prev => {
+                const next = new Set(prev);
+                if (next.has(id)) next.delete(id); else next.add(id);
+                return next;
+              })}
+              onClearContacts={() => setSelectedContacts(new Set())}
             />
           )}
           {step === 1 && (
@@ -862,6 +1021,7 @@ export default function BulkTextWizard({ pages, onClose, onSent }: {
               template={template}
               eligibleCount={utilityEligible}
               totalCount={eligibility?.total ?? 0}
+              recipientMode={recipientMode}
             />
           )}
           {step === 4 && createdBroadcastId && (
