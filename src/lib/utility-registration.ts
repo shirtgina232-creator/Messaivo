@@ -66,6 +66,12 @@ export async function approvedRegistration(workspaceId: string, pageId: string, 
   const row = await prisma.utilityTemplateRegistration.findFirst({ where: { workspaceId, pageId, templateId, contentHash: hash, ...(registrationId ? { id: registrationId } : {}) } });
   if (!row) throw new Error("Register this template revision for the selected Page first");
   const token = await verifyPageGrant(page);
+  const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+  const checkedAt = row.lastCheckedAt;
+  if (row.status === "APPROVED" && row.metaTemplateId && checkedAt !== null && Date.now() - checkedAt.getTime() < TWENTY_FOUR_HOURS_MS) {
+    console.log(`[utility] Using recent approved registration; skipping Meta template refresh (lastCheckedAt=${checkedAt.toISOString()})`);
+    return { page, token, registration: row };
+  }
   const registration = await refreshRegistration(row, token, page.pageId);
   if (registration.status !== "APPROVED" || !registration.metaTemplateId) throw new Error(`Meta template is not approved (${registration.status})`);
   return { page, token, registration };
