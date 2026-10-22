@@ -55,6 +55,13 @@ export async function GET(req: Request) {
 
   const useConfigId = !!(configId && process.env.NODE_ENV === "production");
 
+  console.log("[meta/oauth] initiating OAuth flow", {
+    useConfigId,
+    hasConfigId: !!configId,
+    callbackUrl: cbUrl,
+    host: reqHost,
+  });
+
   const oauthUrl = new URL("https://www.facebook.com/v26.0/dialog/oauth");
   oauthUrl.searchParams.set("client_id", appId);
   oauthUrl.searchParams.set("redirect_uri", cbUrl);
@@ -64,6 +71,9 @@ export async function GET(req: Request) {
     // Facebook Login for Business: only used in production.
     // config_id has its own redirect URI whitelist (separate from standard Facebook Login).
     // In dev, localhost is not in that whitelist, so we fall through to the scope-based flow.
+    // NOTE: permissions come from the Business Integration System, NOT from the scope param.
+    // If /me/accounts returns pages without access_token, the Business Login config in
+    // Meta's app dashboard is missing pages_manage_metadata or pages_messaging.
     oauthUrl.searchParams.set("config_id", configId);
   } else {
     // Standard Facebook Login: used in development and as fallback when config_id is absent.

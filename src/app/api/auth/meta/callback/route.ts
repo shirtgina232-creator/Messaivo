@@ -262,9 +262,16 @@ export async function GET(req: Request) {
     const pages = pResult.data.data ?? [];
     console.log("[meta/callback] /me/accounts result", {
       totalPages: pages.length,
-      pageIds: pages.map(p => p.id),
       pagesWithToken: pages.filter(p => !!p.access_token).length,
     });
+    // Log per-page token presence — never logs the token value itself
+    for (const p of pages) {
+      console.log("[meta/callback] page in /me/accounts", {
+        pageId: p.id,
+        pageName: p.name,
+        hasToken: !!p.access_token,
+      });
+    }
     if (!pages.length) {
       console.warn("[meta/callback] /me/accounts returned 0 pages — user may not manage any pages");
       return redirect(req, "no_pages");
@@ -318,6 +325,18 @@ export async function GET(req: Request) {
       console.log("[meta/callback] page token saved", { pageId: p.id, pageName: p.name });
     }
     console.log("[meta/callback] DB upsert complete", { upsertedCount: upsertedPageIds.length });
+
+    // If pages were returned but none had an access_token, the Business Login
+    // configuration is not granting page-management permissions.  Treat this as
+    // an error rather than silently succeeding with no DB writes.
+    if (upsertedPageIds.length === 0 && pages.length > 0) {
+      console.error("[meta/callback] /me/accounts returned pages but none had access_token", {
+        pageCount: pages.length,
+        pageIds: pages.map(p => p.id),
+        hint: "Check Business Login config in Meta app dashboard — pages_manage_metadata or pages_messaging may be missing",
+      });
+      return redirect(req, "no_page_tokens");
+    }
 
     // ── 5. Re-subscribe webhook for active pages using the fresh token ─────────
     // This runs unconditionally on every OAuth flow — first connect and reconnect
