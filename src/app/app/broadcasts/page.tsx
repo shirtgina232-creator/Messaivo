@@ -437,6 +437,16 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
       .finally(() => setTemplatesLoading(false));
   }, [pageId, templateSearch]);
 
+  // Keep selectedTemplate in sync when templates refresh (e.g. after page change).
+  // Uses a functional updater so selectedTemplate is not a dep -- no loop risk.
+  useEffect(() => {
+    setSelectedTemplate(prev => {
+      if (!prev) return prev;
+      const fresh = templates.find(t => t.id === prev.id);
+      return fresh ?? prev;
+    });
+  }, [templates]);
+
   // â”€â”€ Load groups â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   useEffect(() => {
     if (recipientMode !== "groups") return;
