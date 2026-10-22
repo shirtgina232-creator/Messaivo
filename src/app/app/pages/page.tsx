@@ -61,6 +61,7 @@ const ERROR_MSGS: Record<string, string> = {
   server_error:     "An unexpected server error occurred. Please try again or contact support.",
   invalid_callback: "Invalid callback parameters from Facebook. Please try again.",
   encryption_error: "Token encryption is misconfigured. The META_TOKEN_ENCRYPTION_KEY environment variable must be set to a valid 64-character hex string in Vercel.",
+  no_page_tokens:   "Facebook authorized the app but did not return a Page Access Token. Ensure your Facebook Login for Business configuration includes pages_manage_metadata and pages_messaging, then try again.",
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

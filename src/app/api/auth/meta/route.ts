@@ -71,16 +71,15 @@ export async function GET(req: Request) {
     // Facebook Login for Business: only used in production.
     // config_id has its own redirect URI whitelist (separate from standard Facebook Login).
     // In dev, localhost is not in that whitelist, so we fall through to the scope-based flow.
-    // NOTE: permissions come from the Business Integration System, NOT from the scope param.
-    // If /me/accounts returns pages without access_token, the Business Login config in
-    // Meta's app dashboard is missing pages_manage_metadata or pages_messaging.
     oauthUrl.searchParams.set("config_id", configId);
-  } else {
-    // Standard Facebook Login: used in development and as fallback when config_id is absent.
-    // The redirect URI is validated against the standard "Valid OAuth Redirect URIs" list,
-    // where localhost:3000 is whitelisted.
-    oauthUrl.searchParams.set("scope", "pages_show_list,pages_messaging,pages_manage_metadata,pages_utility_messaging");
   }
+  // Always send scope regardless of config_id.
+  // With FLIB (config_id), permissions come from the Business Integration config, but the
+  // resulting user token only carries those permissions as OAuth scopes when scope is also
+  // explicitly requested. Without scope, /me/accounts omits access_token even if the FLIB
+  // config lists pages_manage_metadata and pages_messaging. Sending both is the original
+  // behavior (commit e132206) and is supported by Meta — config_id and scope are merged.
+  oauthUrl.searchParams.set("scope", "pages_show_list,pages_messaging,pages_manage_metadata,pages_utility_messaging");
 
   const res = NextResponse.redirect(oauthUrl.toString());
   // Cookie kept as defense-in-depth only — not required for state verification.
