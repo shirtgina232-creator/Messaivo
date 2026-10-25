@@ -50,7 +50,6 @@ interface AvailableTemplate {
   }> | null;
 }
 
-interface GroupItem { id: string; name: string; _count?: { members: number } }
 interface ContactItem { id: string; name: string | null; firstName: string | null; lastName: string | null; metaUserId: string; isSubscribed: boolean; lastMessageAt: string | null; relationshipVerifiedAt: string | null; }
 
 // â"€â"€ Helpers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
@@ -384,10 +383,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
   const [pageId, setPageId] = useState(pages[0]?.id ?? "");
 
   // â"€â"€ Audience â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-  const [recipientMode, setRecipientMode] = useState<"all" | "groups" | "contacts">("all");
-  const [groups, setGroups] = useState<GroupItem[]>([]);
-  const [selectedGroups, setSelectedGroups] = useState<Set<string>>(new Set());
-  const [groupsLoading, setGroupsLoading] = useState(false);
+  const [recipientMode, setRecipientMode] = useState<"all" | "contacts">("all");
   const [contactItems, setContactItems] = useState<ContactItem[]>([]);
   const [selectedContacts, setSelectedContacts] = useState<Set<string>>(new Set());
   const [contactsLoading, setContactsLoading] = useState(false);
@@ -440,17 +436,6 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
     return () => controller.abort();
   }, [pageId, templateSearch]);
 
-  // â"€â"€ Load groups â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-  useEffect(() => {
-    if (recipientMode !== "groups") return;
-    setGroupsLoading(true);
-    fetch("/api/groups")
-      .then(r => r.ok ? r.json() : null)
-      .then((d: { groups?: GroupItem[] } | null) => { if (d?.groups) setGroups(d.groups); })
-      .catch(() => {})
-      .finally(() => setGroupsLoading(false));
-  }, [recipientMode]);
-
   // load contacts for Specific Contacts mode
   useEffect(() => {
     if (recipientMode !== "contacts" || !pageId) return;
@@ -493,7 +478,6 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
       try {
         const body: Record<string, unknown> = { pageId };
         if (messagingType === "utility") body.messagingType = "utility";
-        if (recipientMode === "groups" && selectedGroups.size > 0) body.groupIds = [...selectedGroups];
         const res = await fetch("/api/broadcasts/eligibility-check", {
           method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
         });
@@ -512,7 +496,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
       finally { setReachableLoading(false); }
     }, 400);
     return () => { if (reachableTimerRef.current) clearTimeout(reachableTimerRef.current); };
-  }, [pageId, recipientMode, selectedGroups, messagingType]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pageId, recipientMode, messagingType]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selectedPage = pages.find(p => p.id === pageId);
   const filteredTemplates = templates.filter(t =>
@@ -536,9 +520,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
     ? selectedContactItems.filter(c => !isUtilityEligible(c)).length : 0;
   const confirmRecipientLabel = recipientMode === "contacts"
     ? `${selectedContacts.size} contact${selectedContacts.size !== 1 ? "s" : ""}`
-    : recipientMode === "groups"
-    ? `${selectedGroups.size} group${selectedGroups.size !== 1 ? "s" : ""}`
-    : "All subscribers";
+    : "All page contacts";
 
   // Derive variables and preview
   const customVars = selectedTemplate ? extractCustomVars(selectedTemplate.content) : [];
@@ -572,7 +554,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
       ? !!selectedTemplate && allRequiredFilled
       : !!customMessage.trim()) &&
     (scheduleMode === "now" || !!schedDate) &&
-    (recipientMode === "all" || selectedGroups.size > 0 || (recipientMode === "contacts" && selectedContacts.size > 0)) &&
+    (recipientMode === "all" || (recipientMode === "contacts" && selectedContacts.size > 0)) &&
     utilityTemplateReady;
 
   const handleSend = useCallback(async (mode: "send" | "draft") => {
@@ -595,8 +577,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
       }
 
       if (recipientMode === "all") body.allPageContacts = true;
-      else if (recipientMode === "contacts") body.contactIds = [...selectedContacts];
-      else body.groupIds = [...selectedGroups];
+      else body.contactIds = [...selectedContacts];
 
       if (mode === "send" && scheduleMode === "later" && schedDate) {
         body.scheduledAt = new Date(schedDate).toISOString();
@@ -626,7 +607,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
       onCreated(); onClose();
     } catch { setError("Network error. Please try again."); }
     finally { setSubmitting(false); }
-  }, [pageId, broadcastName, messageMode, selectedTemplate, fieldValues, customMessage, recipientMode, selectedGroups, selectedContacts, scheduleMode, schedDate, messagingType, onCreated, onClose]);
+  }, [pageId, broadcastName, messageMode, selectedTemplate, fieldValues, customMessage, recipientMode, selectedContacts, scheduleMode, schedDate, messagingType, onCreated, onClose]);
 
   const FIELD_STYLE = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" };
 
@@ -878,8 +859,8 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
           {/* â‘¢ Audience */}
           <FormSection label="Send To">
             <div className="flex gap-2">
-              {([["all", "All Subscribers"], ["groups", "Specific Groups"], ["contacts", "Specific Contacts"]] as const).map(([m, lbl]) => (
-                <button key={m} onClick={() => { setRecipientMode(m); setSelectedGroups(new Set()); setSelectedContacts(new Set()); }}
+              {([["all", "All Page Contacts"], ["contacts", "Specific Contacts"]] as const).map(([m, lbl]) => (
+                <button key={m} onClick={() => { setRecipientMode(m); setSelectedContacts(new Set()); }}
                   className="flex-1 py-2 rounded-lg text-[12.5px] font-medium"
                   style={{
                     background: recipientMode === m ? "rgba(108,99,255,0.12)" : "rgba(255,255,255,0.03)",
@@ -888,29 +869,6 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
                   }}>{lbl}</button>
               ))}
             </div>
-            {recipientMode === "groups" && (
-              <div className="mt-2 rounded-lg overflow-hidden" style={{ border: "1px solid rgba(255,255,255,0.07)" }}>
-                {groupsLoading
-                  ? <div className="flex items-center gap-2 p-3 text-[12px]" style={{ color: "#8B95A7" }}><Loader2 size={12} className="animate-spin" /> Loading groupsâ€¦</div>
-                  : groups.length === 0
-                  ? <p className="p-3 text-[12px]" style={{ color: "#8B95A7" }}>No groups found.</p>
-                  : groups.map((g, i) => (
-                    <button key={g.id}
-                      onClick={() => setSelectedGroups(prev => { const n = new Set(prev); n.has(g.id) ? n.delete(g.id) : n.add(g.id); return n; })}
-                      className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-white/[0.02]"
-                      style={{ borderTop: i > 0 ? "1px solid rgba(255,255,255,0.05)" : "none" }}>
-                      <span className="text-[12.5px]" style={{ color: "#C4CDD8" }}>{g.name}</span>
-                      <div className="flex items-center gap-2">
-                        {g._count && <span className="text-[11px]" style={{ color: "#8B95A7" }}>{g._count.members.toLocaleString()} members</span>}
-                        <div className="w-4 h-4 rounded flex items-center justify-center"
-                          style={{ background: selectedGroups.has(g.id) ? "#6C63FF" : "rgba(255,255,255,0.07)", border: `1px solid ${selectedGroups.has(g.id) ? "#6C63FF" : "rgba(255,255,255,0.15)"}` }}>
-                          {selectedGroups.has(g.id) && <CheckCircle2 size={10} style={{ color: "#fff" }} />}
-                        </div>
-                      </div>
-                    </button>
-                  ))}
-              </div>
-            )}
             {recipientMode === "contacts" && (
               <div className="mt-2 flex flex-col gap-2">
                 {/* Search + selected count */}

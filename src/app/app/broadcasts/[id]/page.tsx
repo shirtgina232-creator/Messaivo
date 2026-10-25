@@ -57,6 +57,7 @@ interface ProgressData {
   processed: number;
   percentComplete: number;
   estimatedSecondsLeft: number | null;
+  failureReasons: Record<string, number> | null;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -475,6 +476,30 @@ export default function BroadcastDetailPage() {
               ))}
             </div>
           </div>
+
+          {/* Failure Reasons */}
+          {progress?.failureReasons && Object.keys(progress.failureReasons).length > 0 && (
+            <div className="rounded-xl p-5" style={CARD}>
+              <div className="flex items-center gap-2 mb-3">
+                <AlertCircle size={13} style={{ color: "#EF4444" }} />
+                <p className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "#8B95A7" }}>Failure Reasons</p>
+              </div>
+              <div className="flex flex-col gap-2">
+                {Object.entries(progress.failureReasons).map(([reason, count]) => (
+                  <div key={reason} className="flex items-center justify-between gap-3 rounded-lg px-3 py-2"
+                    style={{ background: "rgba(239,68,68,0.05)", border: "1px solid rgba(239,68,68,0.1)" }}>
+                    <span className="text-[12px] truncate" style={{ color: "#C4CDD8" }}>{reason}</span>
+                    <span className="text-[12px] font-semibold shrink-0 tabular-nums" style={{ color: "#EF4444" }}>{count.toLocaleString()}</span>
+                  </div>
+                ))}
+                {(progress.failureReasons["(#551) This person isn't available right now."] || progress.failureReasons["This person isn't available right now."]) && (
+                  <p className="text-[11px] leading-relaxed mt-1" style={{ color: "#8B95A7" }}>
+                    Contacts marked unavailable by Meta have been automatically unsubscribed and will be excluded from future broadcasts.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Message Content */}
           <div className="rounded-xl p-5" style={CARD}>

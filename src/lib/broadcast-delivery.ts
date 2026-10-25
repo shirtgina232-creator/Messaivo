@@ -54,6 +54,17 @@ export async function deliverRecipient(broadcast: Broadcast, contact: Contact, p
       await tx.broadcastRecipient.update({ where: { id: recipientId }, data: { status: retry ? "pending" : status, attemptId: attempt.id, metaMessageId: result.messageId, sentAt: sent ? new Date() : null, failureReason: result.error, nextAttemptAt: retry ? new Date(Date.now() + Math.min(900000, 30000 * 2 ** row.attemptCount) + Math.random() * 5000) : null } });
     }
   });
+
+  // Auto-unsubscribe contacts that Meta permanently rejects:
+  // #551 = person not available (blocked / deactivated account)
+  // #100 = no matching user found (stale/invalid PSID)
+  if (!sent && result.errorCode != null && [551, 100].includes(result.errorCode)) {
+    await prisma.contact.updateMany({
+      where: { id: contact.id, isSubscribed: true },
+      data: { isSubscribed: false },
+    });
+  }
+
   return { success: sent, error: result.error, uncertain: !!result.uncertain };
 }
 

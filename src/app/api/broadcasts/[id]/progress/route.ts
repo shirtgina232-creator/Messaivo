@@ -40,6 +40,21 @@ export async function GET(
 
     if (!broadcast) return notFound("Broadcast not found");
 
+    // Aggregate failure reasons from recipient records (only when there are failures)
+    let failureReasons: Record<string, number> | null = null;
+    if (broadcast.failed > 0) {
+      const rows = await prisma.broadcastRecipient.groupBy({
+        by: ["failureReason"],
+        where: { broadcastId: id, status: "failed", failureReason: { not: null } },
+        _count: { _all: true },
+        orderBy: { _count: { failureReason: "desc" } },
+        take: 10,
+      });
+      if (rows.length > 0) {
+        failureReasons = Object.fromEntries(rows.map(r => [r.failureReason!, r._count._all]));
+      }
+    }
+
     const processed = broadcast.sent + broadcast.failed;
     const total = broadcast.totalRecipients || 1;
     const percentComplete = Math.min(100, Math.round((processed / total) * 100));
@@ -75,6 +90,7 @@ export async function GET(
             lastError: broadcast.broadcastJob.lastError,
           }
         : null,
+      failureReasons,
     });
   } catch (e) {
     console.error("[GET /api/broadcasts/[id]/progress]", e);
