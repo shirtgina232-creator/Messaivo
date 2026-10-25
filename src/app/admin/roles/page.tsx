@@ -1,14 +1,13 @@
-import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
+import { getAdminUser } from "@/lib/admin-helpers";
 import RolesManager from "./_components/RolesManager";
 
 export default async function AdminRolesPage() {
-  const { userId: clerkId } = await auth();
-  if (!clerkId) redirect("/login");
+  const adminUser = await getAdminUser();
+  if (!adminUser) redirect("/login");
 
-  const currentUser = await prisma.user.findUnique({ where: { clerkId }, select: { role: true, id: true } });
-  if (!currentUser || currentUser.role !== "SUPER_ADMIN") {
+  if (!adminUser || adminUser.role !== "SUPER_ADMIN") {
     return (
       <div className="p-6 max-w-[900px] mx-auto">
         <div className="mb-6">
@@ -36,7 +35,7 @@ export default async function AdminRolesPage() {
         <h1 className="text-[20px] font-semibold mb-1" style={{ color: "#F5F7FA" }}>Admin Roles</h1>
         <p className="text-[13px]" style={{ color: "#8B95A7" }}>Manage admin access and role assignments. SUPER_ADMIN only.</p>
       </div>
-      <RolesManager adminUsers={adminUsers} currentUserId={currentUser.id} totalUsers={allUsers} />
+      <RolesManager adminUsers={adminUsers} currentUserId={adminUser.id} totalUsers={allUsers} />
     </div>
   );
 }

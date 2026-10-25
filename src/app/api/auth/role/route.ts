@@ -1,17 +1,11 @@
-import { auth } from "@clerk/nextjs/server";
+import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { getSessionUser, SESSION_COOKIE } from "@/lib/session";
 
-// Returns the authenticated user's role from the database.
-// Called client-side after signIn.finalize() to determine redirect destination.
 export async function GET() {
-  const { userId: clerkId } = await auth();
-  if (!clerkId) return NextResponse.json({ role: null }, { status: 401 });
-
-  const user = await prisma.user.findUnique({
-    where: { clerkId },
-    select: { role: true },
-  });
-
-  return NextResponse.json({ role: user?.role ?? "USER" });
+  const jar = await cookies();
+  const raw = jar.get(SESSION_COOKIE)?.value;
+  const user = await getSessionUser(raw);
+  if (!user) return NextResponse.json({ role: null }, { status: 401 });
+  return NextResponse.json({ role: user.role });
 }

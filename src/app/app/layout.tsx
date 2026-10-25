@@ -1,23 +1,16 @@
-import { auth } from "@clerk/nextjs/server";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { ensureUserWorkspace } from "@/lib/auth-helpers";
+import { getSessionUser, SESSION_COOKIE } from "@/lib/session";
 import AppShell from "@/components/app/AppShell";
 import { WorkspaceProvider } from "@/lib/workspace-context";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const authState = await auth();
-  await auth.protect();
+  const jar = await cookies();
+  const raw = jar.get(SESSION_COOKIE)?.value;
+  const sessionUser = await getSessionUser(raw);
+  if (!sessionUser) redirect("/login");
 
-  // Get-or-create the user's DB record + workspace without requiring the Clerk webhook.
-  try {
-    await ensureUserWorkspace();
-  } catch (e) {
-    console.error("[AppLayout] ensureUserWorkspace failed:", e);
-  }
-
-  // Fetch initial workspace data to hydrate the client-side WorkspaceProvider.
-  // This avoids a loading flicker on first render — the client-side sync via
-  // /api/credits still runs to keep the data fresh.
   let initialPlanId = "lite";
   let initialLedger: {
     monthlyAllocation: number;
@@ -27,34 +20,34 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     unlimitedCredits: boolean;
   } | null = null;
   let initialUserName: string | null = null;
+  let initialUserEmail: string | null = null;
 
   try {
-    const { userId: clerkId } = await auth();
-    if (clerkId) {
-      const userData = await prisma.user.findUnique({
-        where: { clerkId },
-        select: {
-          name: true,
-          workspace: {
-            select: {
-              planId: true,
-              creditLedger: {
-                select: {
-                  monthlyAllocation: true,
-                  bonusCredits: true,
-                  usedThisPeriod: true,
-                  periodEnd: true,
-                  unlimitedCredits: true,
-                },
+    const userData = await prisma.user.findUnique({
+      where: { id: sessionUser.id },
+      select: {
+        name: true,
+        email: true,
+        workspace: {
+          select: {
+            planId: true,
+            creditLedger: {
+              select: {
+                monthlyAllocation: true,
+                bonusCredits: true,
+                usedThisPeriod: true,
+                periodEnd: true,
+                unlimitedCredits: true,
               },
             },
           },
         },
-      });
-      initialUserName = userData?.name ?? null;
-      if (userData?.workspace?.planId) initialPlanId = userData.workspace.planId;
-      if (userData?.workspace?.creditLedger) initialLedger = userData.workspace.creditLedger;
-    }
+      },
+    });
+    initialUserName = userData?.name ?? null;
+    initialUserEmail = userData?.email ?? null;
+    if (userData?.workspace?.planId) initialPlanId = userData.workspace.planId;
+    if (userData?.workspace?.creditLedger) initialLedger = userData.workspace.creditLedger;
   } catch (e) {
     console.error("[AppLayout] workspace fetch failed:", e);
   }
@@ -64,6 +57,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       initialPlanId={initialPlanId}
       initialLedger={initialLedger}
       initialUserName={initialUserName}
+      initialUserEmail={initialUserEmail}
     >
       <AppShell>{children}</AppShell>
     </WorkspaceProvider>

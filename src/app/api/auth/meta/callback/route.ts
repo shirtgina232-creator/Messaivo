@@ -180,18 +180,17 @@ export async function GET(req: Request) {
   console.log("[meta/callback] using redirect_uri", cbUrl);
 
   try {
-    // ── Workspace — resolved via userId from HMAC-signed state, not from auth() ──
-    // auth() is unavailable here: Clerk's cross-origin handshake intercepts the
-    // Facebook redirect-back before this handler runs. savedClerkId (extracted from
-    // the verified state payload) is the safe alternative.
+    // ── Workspace — resolved via userId from HMAC-signed state ──────────────────
+    // savedClerkId now holds the internal User.id (not a Clerk id) after the
+    // Clerk removal. Variable name kept for minimal diff.
     const dbUser = await prisma.user.findUnique({
-      where: { clerkId: savedClerkId },
+      where: { id: savedClerkId },
       include: { workspace: true },
     });
     const ws = dbUser?.workspace ?? null;
     if (!ws || dbUser?.status !== "ACTIVE") {
       console.warn("[meta/callback] workspace lookup failed", {
-        clerkId: savedClerkId,
+        userId: savedClerkId,
         found: !!dbUser,
         status: dbUser?.status ?? "none",
       });

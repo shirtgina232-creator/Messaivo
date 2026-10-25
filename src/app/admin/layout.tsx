@@ -1,18 +1,21 @@
-import { auth } from "@clerk/nextjs/server";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
+import { getSessionUser, SESSION_COOKIE } from "@/lib/session";
 import { isAdminRole } from "@/lib/admin-helpers";
 import AdminShell from "@/app/admin/_components/AdminShell";
 
 export const metadata = { title: "Messaivo Admin" };
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
-  const { userId: clerkId } = await auth();
+  const jar = await cookies();
+  const raw = jar.get(SESSION_COOKIE)?.value;
+  const sessionUser = await getSessionUser(raw);
 
-  if (!clerkId) redirect("/login");
+  if (!sessionUser) redirect("/login");
 
   const user = await prisma.user.findUnique({
-    where: { clerkId },
+    where: { id: sessionUser.id },
     select: { role: true, name: true, email: true },
   });
 

@@ -1,4 +1,3 @@
-import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/db";
 import { requireAdminOrError, logAdminAction } from "@/lib/admin-helpers";
 import { ok, badRequest, serverError } from "@/lib/api-helpers";
@@ -21,8 +20,6 @@ export async function PUT(req: Request) {
   if (err) return err;
 
   try {
-    const { userId: clerkId } = await auth();
-
     let body: unknown;
     try { body = await req.json(); } catch { return badRequest("Invalid JSON"); }
 
@@ -51,7 +48,7 @@ export async function PUT(req: Request) {
       ctaText:            str("ctaText",            "Get started free"),
       announcementText:   strOrNull("announcementText"),
       footerContent:      strOrNull("footerContent"),
-      updatedBy:          clerkId ?? null,
+      updatedBy:          admin.id,
     };
 
     const theme = await prisma.siteTheme.upsert({

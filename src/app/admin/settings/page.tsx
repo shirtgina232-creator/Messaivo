@@ -1,17 +1,14 @@
-import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { isAdminRole } from "@/lib/admin-helpers";
+import { getAdminUser, isAdminRole } from "@/lib/admin-helpers";
 import SettingsForm from "./_components/SettingsForm";
 
 export default async function AdminSettingsPage() {
-  const { userId: clerkId } = await auth();
-  if (!clerkId) redirect("/login");
+  const adminUser = await getAdminUser();
+  if (!adminUser) redirect("/login");
+  if (!isAdminRole(adminUser.role)) redirect("/app");
 
-  const user = await prisma.user.findUnique({ where: { clerkId }, select: { role: true } });
-  if (!user || !isAdminRole(user.role)) redirect("/app");
-
-  const isSuperAdmin = user.role === "SUPER_ADMIN";
+  const isSuperAdmin = adminUser.role === "SUPER_ADMIN";
 
   const settings = await prisma.globalSettings.upsert({
     where: { id: "singleton" },

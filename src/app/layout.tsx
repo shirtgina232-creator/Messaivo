@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { cache } from "react";
 import Script from "next/script";
 import { Geist, Geist_Mono } from "next/font/google";
-import { ClerkProvider } from "@clerk/nextjs";
 import "./globals.css";
 import ThemeProvider from "@/components/ThemeProvider";
 import { prisma } from "@/lib/db";
@@ -106,8 +105,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     : "";
 
   return (
-    <ClerkProvider>
-      <html
+    <html
         lang="en"
         data-theme="dark"
         suppressHydrationWarning
@@ -189,6 +187,5 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           />
         </body>
       </html>
-    </ClerkProvider>
   );
 }

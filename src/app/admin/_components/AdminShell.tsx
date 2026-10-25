@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useAuth } from "@clerk/nextjs";
+import { useRouter } from "next/navigation";
 import {
   LayoutDashboard, Users, Building2, Zap, Link2, Radio,
   MessageSquare, CreditCard, Palette, Settings, ScrollText,
@@ -78,7 +78,12 @@ function Sidebar({
   adminRole: string;
 }) {
   const pathname = usePathname();
-  const { signOut } = useAuth();
+  const router = useRouter();
+
+  const signOut = async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    router.push("/login");
+  };
 
   const isActive = (href: string) =>
     href === "/admin" ? pathname === "/admin" : pathname.startsWith(href);
@@ -208,7 +213,7 @@ function Sidebar({
           <button
             className={`flex items-center gap-2 w-full px-3 py-2 rounded-lg text-[12.5px] font-medium hover:bg-[rgba(255,255,255,0.04)] transition-colors ${collapsed ? "justify-center" : ""}`}
             style={{ color: "#EF4444" }}
-            onClick={() => signOut({ redirectUrl: "/login" })}
+            onClick={signOut}
             title={collapsed ? "Sign out" : undefined}
           >
             <LogOut size={14} />
@@ -231,7 +236,12 @@ function Topbar({
 }) {
   const pathname = usePathname();
   const [userOpen, setUserOpen] = useState(false);
-  const { signOut } = useAuth();
+  const router = useRouter();
+
+  const signOut = async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    router.push("/login");
+  };
 
   const roleColor = ROLE_COLORS[adminRole] ?? "#EF4444";
 
@@ -301,7 +311,7 @@ function Topbar({
             <button
               className="w-full flex items-center gap-2.5 px-4 py-2.5 text-[12.5px] hover:bg-[rgba(255,255,255,0.04)]"
               style={{ color: "#EF4444" }}
-              onClick={() => signOut({ redirectUrl: "/login" })}
+              onClick={signOut}
             >
               <LogOut size={13} /> Sign out
             </button>

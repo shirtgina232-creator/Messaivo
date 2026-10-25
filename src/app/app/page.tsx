@@ -1,5 +1,6 @@
-import { auth } from "@clerk/nextjs/server";
+import { cookies } from "next/headers";
 import { prisma } from "@/lib/db";
+import { getSessionUser, SESSION_COOKIE } from "@/lib/session";
 import Link from "next/link";
 import { MessageSquare, Users, Radio, CreditCard, Link2, Circle, Clock, ChevronRight, Activity, FileText } from "lucide-react";
 
@@ -35,7 +36,9 @@ export default async function DashboardPage() {
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
 
-  const { userId: clerkId } = await auth();
+  const jar = await cookies();
+  const raw = jar.get(SESSION_COOKIE)?.value;
+  const sessionUser = await getSessionUser(raw);
   let firstName = "there";
   let credits = 0;
   let connectedPages = 0;
@@ -49,10 +52,10 @@ export default async function DashboardPage() {
   let fbPages: Array<{ id: string; pageName: string; pageId: string; _count: { contacts: number } }> = [];
   let totalBroadcasts = 0;
 
-  if (clerkId) {
+  if (sessionUser) {
     try {
       const userData = await prisma.user.findUnique({
-        where: { clerkId },
+        where: { id: sessionUser.id },
         select: {
           name: true,
           workspace: {

@@ -1,12 +1,14 @@
-import { auth } from "@clerk/nextjs/server";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
+import { getSessionUser, SESSION_COOKIE } from "@/lib/session";
 import SignupForm from "@/app/signup/SignupForm";
 
 export default async function SignupPage() {
-  const { userId: clerkId, sessionStatus } = await auth();
-  // Only redirect a fully signed-in user; pending (social sign-up in progress) stays here to complete.
-  if (clerkId && sessionStatus !== "pending") redirect("/app");
+  const jar = await cookies();
+  const raw = jar.get(SESSION_COOKIE)?.value;
+  const sessionUser = await getSessionUser(raw);
+  if (sessionUser) redirect("/app");
 
   let heading = "Create your account";
   let description = "Start managing customer conversations with Messaivo.";

@@ -1,6 +1,7 @@
-import { auth } from "@clerk/nextjs/server";
+import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { getSessionUser, SESSION_COOKIE } from "@/lib/session";
 import type { Workspace } from "@prisma/client";
 
 // ── Response factories ────────────────────────────────────────────────────────
@@ -20,14 +21,15 @@ export const serverError = () =>
 /**
  * Resolves the current request's authenticated workspace from the database.
  * Returns null if the user is unauthenticated or has no workspace yet.
- * Call this inside every API route handler.
  */
 export async function getWorkspace(): Promise<Workspace | null> {
-  const { userId: clerkId } = await auth();
-  if (!clerkId) return null;
+  const jar = await cookies();
+  const raw = jar.get(SESSION_COOKIE)?.value;
+  const sessionUser = await getSessionUser(raw);
+  if (!sessionUser) return null;
 
   const user = await prisma.user.findUnique({
-    where: { clerkId },
+    where: { id: sessionUser.id },
     include: { workspace: true },
   });
 

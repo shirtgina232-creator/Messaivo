@@ -51,6 +51,7 @@ export type WorkspaceState = {
   teamMemberCount: number;
   creditActivity: CreditActivity[];
   userName: string | null;
+  userEmail: string | null;
 };
 
 type WorkspaceCtx = WorkspaceState & {
@@ -92,6 +93,7 @@ type ProviderProps = {
   initialPlanId?: string;
   initialLedger?: WorkspaceInitialLedger | null;
   initialUserName?: string | null;
+  initialUserEmail?: string | null;
 };
 
 // ── Context ───────────────────────────────────────────────────────────────────
@@ -103,6 +105,7 @@ export function WorkspaceProvider({
   initialPlanId = "lite",
   initialLedger = null,
   initialUserName = null,
+  initialUserEmail = null,
 }: ProviderProps) {
   const [state, setState] = useState<WorkspaceState>(() => ({
     planId: initialPlanId,
@@ -117,6 +120,7 @@ export function WorkspaceProvider({
     teamMemberCount: 1,
     creditActivity: [],
     userName: initialUserName,
+    userEmail: initialUserEmail,
   }));
 
   const [selectedPageId, setSelectedPageId] = useState<string | null>(null);

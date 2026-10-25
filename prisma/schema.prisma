@@ -6,20 +6,57 @@ datasource db {
   provider = "postgresql"
 }
 
-// Users — synced from Clerk via webhook
 model User {
-  id        String   @id @default(cuid())
-  clerkId   String   @unique
-  email     String   @unique
-  name      String?
-  avatarUrl String?
-  role      String   @default("USER") // "USER" | "ADMIN" | "SUPER_ADMIN" | "SUPPORT" | "FINANCE"
-  status    String   @default("ACTIVE") // "ACTIVE" | "SUSPENDED"
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id           String  @id @default(cuid())
+  clerkId      String? @unique // legacy — nullable after Clerk removal
+  email        String  @unique
+  name         String?
+  avatarUrl    String?
+  passwordHash String?
+  role         String  @default("USER") // "USER" | "ADMIN" | "SUPER_ADMIN" | "SUPPORT" | "FINANCE"
+  status       String  @default("ACTIVE") // "ACTIVE" | "SUSPENDED"
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  workspace     Workspace?
-  adminAuditLog AdminAuditLog[]
+  workspace           Workspace?
+  adminAuditLog       AdminAuditLog[]
+  sessions            Session[]
+  passwordResetTokens PasswordResetToken[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique // SHA-256 hash of the raw cookie token
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique // SHA-256 hash of the raw email token
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// SMTP settings singleton — encrypted password stored with AES-256-GCM
+model SmtpSettings {
+  id          String   @id @default("singleton")
+  host        String   @default("")
+  port        Int      @default(587)
+  secure      Boolean  @default(false)
+  username    String   @default("")
+  passwordEnc String   @default("") // AES-256-GCM encrypted, same key as META_TOKEN_ENCRYPTION_KEY
+  fromName    String   @default("")
+  fromEmail   String   @default("")
+  updatedAt   DateTime @updatedAt
 }
 
 // Workspace — one per user (maps to the demo WorkspaceContext)

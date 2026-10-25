@@ -1,11 +1,10 @@
-import { auth, currentUser } from "@clerk/nextjs/server";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 
 const isUniqueViolation = (e: unknown) =>
   e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002";
 
-// Emails listed here get ADMIN role on first DB sync. Server-side only.
+// Emails listed here get ADMIN role on first signup. Server-side only.
 // Set INITIAL_ADMIN_EMAILS=email1@example.com,email2@example.com in .env.local.
 function resolveRole(email: string): "USER" | "ADMIN" {
   const adminEmails = (process.env.INITIAL_ADMIN_EMAILS ?? "")
@@ -15,88 +14,53 @@ function resolveRole(email: string): "USER" | "ADMIN" {
   return adminEmails.includes(email.toLowerCase()) ? "ADMIN" : "USER";
 }
 
+export type CreateUserInput = {
+  email: string;
+  name?: string | null;
+  passwordHash: string;
+  avatarUrl?: string | null;
+};
+
 /**
- * Get-or-create the authenticated user's database record + workspace.
- * Safe to call on every /app page load — no-ops when records already exist.
- * Only fetches the Clerk profile when the DB record is missing (slow path).
+ * Create user + workspace + credit ledger atomically at signup.
+ * Returns the new user id.
  */
-export async function ensureUserWorkspace(): Promise<void> {
-  const { userId: clerkId } = await auth();
-  if (!clerkId) return;
-
-  // Fast path: both records exist — single query, no Clerk API call
-  const existing = await prisma.user.findUnique({
-    where: { clerkId },
-    select: { id: true, workspace: { select: { id: true } } },
-  });
-  if (existing?.workspace) return;
-
-  // Slow path: fetch Clerk profile for email / name
-  const clerkUser = await currentUser();
-  if (!clerkUser) return;
-
-  const email =
-    clerkUser.emailAddresses.find((e) => e.id === clerkUser.primaryEmailAddressId)
-      ?.emailAddress ?? clerkUser.emailAddresses[0]?.emailAddress ?? "";
-  const name = [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(" ") || null;
+export async function createUserWithWorkspace(input: CreateUserInput): Promise<string> {
+  const { email, name, passwordHash, avatarUrl } = input;
   const workspaceName = name ? `${name.split(" ")[0]}'s Workspace` : "My Workspace";
   const periodEnd = new Date();
   periodEnd.setMonth(periodEnd.getMonth() + 1);
   const role = resolveRole(email);
 
-  if (!existing) {
-    // Create user + workspace + ledger atomically via nested writes
-    try {
-      await prisma.user.create({
-        data: {
-          clerkId,
-          email,
-          name,
-          avatarUrl: clerkUser.imageUrl || null,
-          role,
-          workspace: {
-            create: {
-              name: workspaceName,
-              planId: "lite",
-              creditLedger: {
-                create: {
-                  monthlyAllocation: 30_000,
-                  bonusCredits: 0,
-                  usedThisPeriod: 0,
-                  periodStart: new Date(),
-                  periodEnd,
-                },
+  try {
+    const user = await prisma.user.create({
+      data: {
+        email,
+        name: name ?? null,
+        avatarUrl: avatarUrl ?? null,
+        passwordHash,
+        role,
+        workspace: {
+          create: {
+            name: workspaceName,
+            planId: "lite",
+            creditLedger: {
+              create: {
+                monthlyAllocation: 30_000,
+                bonusCredits: 0,
+                usedThisPeriod: 0,
+                periodStart: new Date(),
+                periodEnd,
               },
             },
           },
         },
-      });
-    } catch (e) {
-      // P2002: race condition — another concurrent request already created this user
-      if (!isUniqueViolation(e)) throw e;
-    }
-    return;
-  }
-
-  // User exists but has no workspace — create it
-  try {
-    await prisma.workspace.create({
-      data: {
-        userId: existing.id,
-        name: workspaceName,
-        planId: "lite",
-        creditLedger: {
-          create: {
-            monthlyAllocation: 30_000,
-            bonusCredits: 0,
-            usedThisPeriod: 0,
-            periodStart: new Date(),
-            periodEnd,
-          },
-        },
       },
+      select: { id: true },
     });
+    return user.id;
   } catch (e) {
-    if (!isUniqueViolation(e)) throw e;
+    if (isUniqueViolation(e)) throw new Error("Email already registered");
+    throw e;
   }
 }

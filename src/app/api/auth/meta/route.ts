@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { auth } from "@clerk/nextjs/server";
+import { cookies } from "next/headers";
 import { createHmac, randomBytes } from "crypto";
 import { metaCallbackUrl } from "@/lib/meta-oauth";
+import { getSessionUser, SESSION_COOKIE } from "@/lib/session";
 
 /**
  * Build an HMAC-signed state token for the Facebook OAuth flow.
@@ -29,8 +30,10 @@ function signState(nonce: string, userId: string, originHost: string): string {
 }
 
 export async function GET(req: Request) {
-  const authResult = await auth();
-  const { userId } = authResult;
+  const jar = await cookies();
+  const raw = jar.get(SESSION_COOKIE)?.value;
+  const sessionUser = await getSessionUser(raw);
+  const userId = sessionUser?.id;
   if (!userId) {
     console.warn("[meta/oauth] no userId — redirecting to /login");
     return NextResponse.redirect(new URL("/login", req.url));

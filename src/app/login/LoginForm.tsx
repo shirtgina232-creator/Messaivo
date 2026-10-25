@@ -4,13 +4,10 @@ import { useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { useSignIn } from "@clerk/nextjs";
-import { Eye, EyeOff, ArrowRight, ArrowLeft, CheckCircle } from "lucide-react";
+import { Eye, EyeOff, ArrowRight, ArrowLeft, Mail } from "lucide-react";
 import { MessaivoLogo } from "@/components/MessaivoLogo";
 
-// "verify" handles both code entry and new-password entry without a view change,
-// which keeps the Clerk signIn attempt alive between verifyCode() and submitPassword().
-type View = "login" | "forgot" | "verify";
+type View = "login" | "forgot" | "sent";
 
 type Props = {
   heading?: string;
@@ -60,148 +57,70 @@ export default function LoginForm({
   logoUrl,
 }: Props) {
   const router = useRouter();
-  const { signIn, fetchStatus } = useSignIn();
-  const isFetching = fetchStatus === "fetching";
 
   const [view, setView] = useState<View>("login");
   const [busy, setBusy] = useState(false);
-  const loading = isFetching || busy;
 
   // Login
   const [email, setEmail]       = useState("");
   const [password, setPassword] = useState("");
   const [error, setError]       = useState("");
 
-  // Forgot / verify
-  const [resetEmail, setResetEmail]   = useState("");
-  const [code, setCode]               = useState("");
-  // codeVerified gates the password fields — no view change occurs between
-  // verifyCode() and submitPassword() so the Clerk attempt stays intact.
-  const [codeVerified, setCodeVerified] = useState(false);
-  const [newPw, setNewPw]             = useState("");
-  const [confirmPw, setConfirmPw]     = useState("");
+  // Forgot
+  const [resetEmail, setResetEmail] = useState("");
+  const [sentEmail, setSentEmail]   = useState("");
 
   function goTo(v: View) {
     setError("");
-    setCodeVerified(false);
-    setCode("");
-    setNewPw("");
-    setConfirmPw("");
     setView(v);
   }
 
   // ── SIGN IN ────────────────────────────────────────────────────────────────
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    // Browser autofill bypasses React onChange on controlled inputs.
-    // Read the real DOM value via FormData as a fallback.
     const fd = new FormData(e.currentTarget);
     const emailVal = email || (fd.get("email") as string) || "";
     const pwVal    = password || (fd.get("password") as string) || "";
     if (!emailVal || !pwVal) { setError("Please fill in all fields."); return; }
-    if (!signIn) { setError("Login is not available yet. Please refresh the page."); return; }
     setError("");
+    setBusy(true);
     try {
-      const { error: err } = await signIn.password({ emailAddress: emailVal, password: pwVal });
-      if (err) { setError(err.message ?? "Invalid email or password."); return; }
-      if (signIn.status === "complete") {
-        const { error: finalErr } = await signIn.finalize();
-        if (finalErr) { setError(finalErr.message ?? "Failed to activate session."); return; }
-        try {
-          const res = await fetch("/api/auth/role");
-          const { role } = (await res.json()) as { role: string | null };
-          router.push(["SUPER_ADMIN", "ADMIN", "SUPPORT", "FINANCE"].includes(role ?? "") ? "/admin" : "/app");
-        } catch {
-          router.push("/app");
-        }
-      } else if (signIn.status === "needs_second_factor") {
-        setError("This account requires two-factor authentication, which is not supported here yet.");
-      } else {
-        setError("Sign-in could not be completed. Please try again.");
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: emailVal, password: pwVal }),
+      });
+      const data = await res.json() as { ok?: boolean; role?: string; error?: string };
+      if (!res.ok || !data.ok) {
+        setError(data.error ?? "Invalid email or password.");
+        return;
       }
+      const role = data.role ?? "";
+      router.push(["SUPER_ADMIN", "ADMIN", "SUPPORT", "FINANCE"].includes(role) ? "/admin" : "/app");
     } catch {
-      setError("Invalid email or password.");
+      setError("Network error. Please try again.");
+    } finally {
+      setBusy(false);
     }
   };
 
-  // ── STEP 1: SEND CODE ─────────────────────────────────────────────────────
-  const handleSendCode = async (e: React.FormEvent) => {
+  // ── FORGOT PASSWORD ────────────────────────────────────────────────────────
+  const handleForgot = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!resetEmail) { setError("Please enter your email address."); return; }
-    if (!signIn) { setError("Login is not available yet. Please refresh the page."); return; }
     setError("");
     setBusy(true);
     try {
-      const { error: createErr } = await signIn.create({ identifier: resetEmail });
-      if (createErr) { setError(createErr.message ?? "No account found with that email."); return; }
-
-      const { error: sendErr } = await signIn.resetPasswordEmailCode.sendCode();
-      if (sendErr) { setError(sendErr.message ?? "Failed to send reset code. Try again."); return; }
-
-      // Move to verify view — code is now in flight
-      setError("");
-      setView("verify");
+      await fetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: resetEmail }),
+      });
+      // Always show "sent" to prevent email enumeration
+      setSentEmail(resetEmail);
+      setView("sent");
     } catch {
-      setError("Could not send reset email. Check the address and try again.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // ── STEP 2a: VERIFY CODE ──────────────────────────────────────────────────
-  // On success we reveal the password fields IN THE SAME VIEW.
-  // No view transition = signIn attempt stays alive.
-  const handleVerifyCode = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!code) { setError("Please enter the verification code."); return; }
-    if (!signIn) { setError("Session expired. Please start over."); return; }
-    setError("");
-    setBusy(true);
-    try {
-      const { error: verifyErr } = await signIn.resetPasswordEmailCode.verifyCode({ code });
-      if (verifyErr) { setError(verifyErr.message ?? "Invalid or expired code. Try again."); return; }
-      // Reveal password fields without changing view
-      setCodeVerified(true);
-    } catch {
-      setError("Invalid code. Please try again.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // ── STEP 2b: SET NEW PASSWORD ─────────────────────────────────────────────
-  // Called while still on the "verify" view — same signIn instance guaranteed.
-  const handleSetPassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newPw || !confirmPw)  { setError("Please fill in both password fields."); return; }
-    if (newPw !== confirmPw)   { setError("Passwords do not match."); return; }
-    if (newPw.length < 8)      { setError("Password must be at least 8 characters."); return; }
-    if (!signIn) { setError("Session expired. Please start the reset process again."); return; }
-    setError("");
-    setBusy(true);
-    try {
-      const { error: pwErr } = await signIn.resetPasswordEmailCode.submitPassword({ password: newPw });
-      if (pwErr) { setError(pwErr.message ?? "Failed to set password. Please try again."); return; }
-      // Password changed — if sign-in is now complete, activate the session and go to app.
-      // Without finalize() the session stays in a completed-but-inactive state, causing the
-      // form to appear stuck. Auto-signing-in after reset is the expected UX for this flow.
-      if (signIn.status === "complete") {
-        const { error: finalErr } = await signIn.finalize();
-        if (!finalErr) {
-          try {
-            const res = await fetch("/api/auth/role");
-            const { role } = (await res.json()) as { role: string | null };
-            router.push(["SUPER_ADMIN", "ADMIN", "SUPPORT", "FINANCE"].includes(role ?? "") ? "/admin" : "/app");
-          } catch {
-            router.push("/app");
-          }
-          return;
-        }
-      }
-      // finalize failed or status not complete — go to login so user can sign in manually
-      router.push("/login?reset=success");
-    } catch {
-      setError("Something went wrong. Please start over.");
+      setError("Could not send reset email. Please try again.");
     } finally {
       setBusy(false);
     }
@@ -211,11 +130,11 @@ export default function LoginForm({
   const submitBtn = (label: React.ReactNode, loadingLabel: string) => (
     <button
       type="submit"
-      disabled={loading}
+      disabled={busy}
       className="flex items-center justify-center gap-2 w-full py-3 rounded-xl text-[13.5px] font-semibold text-white transition-all"
-      style={{ background: loading ? "rgba(108,99,255,0.6)" : "#6C63FF" }}
+      style={{ background: busy ? "rgba(108,99,255,0.6)" : "#6C63FF" }}
     >
-      {loading ? loadingLabel : label}
+      {busy ? loadingLabel : label}
     </button>
   );
 
@@ -290,17 +209,17 @@ export default function LoginForm({
             </>
           )}
 
-          {/* ── STEP 1: ENTER EMAIL ── */}
+          {/* ── FORGOT: ENTER EMAIL ── */}
           {view === "forgot" && (
             <>
               {backBtn(() => goTo("login"), "Back to sign in")}
 
               <h1 className="text-[20px] font-semibold mb-1" style={{ color: "#F5F7FA" }}>Reset password</h1>
               <p className="text-[13px] mb-6" style={{ color: "#8B95A7" }}>
-                Enter your account email and we&apos;ll send you a 6-digit verification code.
+                Enter your account email and we&apos;ll send you a reset link.
               </p>
 
-              <form onSubmit={handleSendCode} className="flex flex-col gap-4">
+              <form onSubmit={handleForgot} className="flex flex-col gap-4">
                 <div>
                   <label className="text-[12px] font-medium block mb-1.5" style={{ color: "#8B95A7" }}>Email</label>
                   <input
@@ -312,95 +231,29 @@ export default function LoginForm({
 
                 {error && <p className="text-[12px] text-red-400">{error}</p>}
 
-                {submitBtn(<>Send code <ArrowRight size={15} /></>, "Sending…")}
+                {submitBtn(<>Send reset link <ArrowRight size={15} /></>, "Sending…")}
               </form>
             </>
           )}
 
-          {/* ── STEP 2: VERIFY CODE → (same view) → SET PASSWORD ── */}
-          {view === "verify" && (
+          {/* ── SENT CONFIRMATION ── */}
+          {view === "sent" && (
             <>
-              {!codeVerified && backBtn(() => goTo("forgot"))}
-
-              {/* Phase A: code entry */}
-              {!codeVerified && (
-                <>
-                  <h1 className="text-[20px] font-semibold mb-1" style={{ color: "#F5F7FA" }}>
-                    Enter verification code
-                  </h1>
-                  <p className="text-[13px] mb-6" style={{ color: "#8B95A7" }}>
-                    We sent a 6-digit code to{" "}
-                    <span style={{ color: "#F5F7FA" }}>{resetEmail}</span>. Enter it below.
-                  </p>
-
-                  <form onSubmit={handleVerifyCode} className="flex flex-col gap-4">
-                    <div>
-                      <label className="text-[12px] font-medium block mb-1.5" style={{ color: "#8B95A7" }}>
-                        Verification code
-                      </label>
-                      <input
-                        type="text" value={code} onChange={e => setCode(e.target.value.trim())}
-                        placeholder="000000" maxLength={6} inputMode="numeric"
-                        className={inputCls} style={inputStyle} autoFocus
-                      />
-                    </div>
-
-                    {error && <p className="text-[12px] text-red-400">{error}</p>}
-
-                    {submitBtn(<>Verify code <ArrowRight size={15} /></>, "Verifying…")}
-
-                    <p className="text-center text-[12px]" style={{ color: "#8B95A7" }}>
-                      Didn&apos;t receive it?{" "}
-                      <button
-                        type="button"
-                        onClick={() => goTo("forgot")}
-                        className="font-medium transition-opacity hover:opacity-80"
-                        style={{ color: "#6C63FF" }}
-                      >
-                        Resend code
-                      </button>
-                    </p>
-                  </form>
-                </>
-              )}
-
-              {/* Phase B: password entry — revealed after verifyCode() succeeds */}
-              {codeVerified && (
-                <>
-                  <div className="flex items-center gap-2 mb-5">
-                    <CheckCircle size={15} className="shrink-0" style={{ color: "#22c55e" }} />
-                    <span className="text-[12px]" style={{ color: "#8B95A7" }}>
-                      Code verified — now set your new password
-                    </span>
-                  </div>
-
-                  <h1 className="text-[20px] font-semibold mb-1" style={{ color: "#F5F7FA" }}>
-                    Set new password
-                  </h1>
-                  <p className="text-[13px] mb-6" style={{ color: "#8B95A7" }}>
-                    Choose a new password for your account.
-                  </p>
-
-                  <form onSubmit={handleSetPassword} className="flex flex-col gap-4">
-                    <div>
-                      <label className="text-[12px] font-medium block mb-1.5" style={{ color: "#8B95A7" }}>
-                        New password
-                      </label>
-                      <PwInput value={newPw} onChange={setNewPw} placeholder="Min. 8 characters" autoFocus name="new-password" autoComplete="new-password" />
-                    </div>
-                    <div>
-                      <label className="text-[12px] font-medium block mb-1.5" style={{ color: "#8B95A7" }}>
-                        Confirm password
-                      </label>
-                      <PwInput value={confirmPw} onChange={setConfirmPw} name="confirm-password" autoComplete="new-password" />
-                    </div>
-
-                    {error && <p className="text-[12px] text-red-400">{error}</p>}
-
-                    {submitBtn(<>Reset password <ArrowRight size={15} /></>, "Resetting…")}
-                  </form>
-                </>
-              )}
+              <div className="flex items-center justify-center w-12 h-12 rounded-2xl mb-5 mx-auto" style={{ background: "rgba(108,99,255,0.12)" }}>
+                <Mail size={22} style={{ color: "#6C63FF" }} />
+              </div>
+              <h1 className="text-[20px] font-semibold mb-1 text-center" style={{ color: "#F5F7FA" }}>Check your email</h1>
+              <p className="text-[13px] mb-6 text-center" style={{ color: "#8B95A7" }}>
+                If <span className="font-medium" style={{ color: "#F5F7FA" }}>{sentEmail}</span> is registered, you&apos;ll receive a password reset link shortly.
+              </p>
+              <button
+                type="button"
+                className="w-full py-3 rounded-xl text-[13.5px] font-semibold text-white"
+                style={{ background: "#6C63FF" }}
+                onClick={() => { goTo("login"); }}
+              >
+                Back to sign in
+              </button>
             </>
           )}
 

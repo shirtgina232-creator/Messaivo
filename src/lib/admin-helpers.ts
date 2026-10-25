@@ -1,22 +1,25 @@
-import { auth } from "@clerk/nextjs/server";
+import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { getSessionUser, SESSION_COOKIE } from "@/lib/session";
 
 export const ADMIN_ROLES = ["SUPER_ADMIN", "ADMIN", "SUPPORT", "FINANCE"] as const;
 export type AdminRole = (typeof ADMIN_ROLES)[number];
 
-type AdminUser = { id: string; clerkId: string; email: string; name: string | null; role: string };
+type AdminUser = { id: string; clerkId: string | null; email: string; name: string | null; role: string };
 
 export function isAdminRole(role: string): role is AdminRole {
   return (ADMIN_ROLES as readonly string[]).includes(role);
 }
 
 export async function getAdminUser(): Promise<AdminUser | null> {
-  const { userId: clerkId } = await auth();
-  if (!clerkId) return null;
+  const jar = await cookies();
+  const raw = jar.get(SESSION_COOKIE)?.value;
+  const sessionUser = await getSessionUser(raw);
+  if (!sessionUser) return null;
   return prisma.user.findUnique({
-    where: { clerkId },
+    where: { id: sessionUser.id },
     select: { id: true, clerkId: true, email: true, name: true, role: true },
   });
 }

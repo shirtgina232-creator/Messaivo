@@ -1,17 +1,16 @@
-import { auth } from "@clerk/nextjs/server";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
+import { getSessionUser, SESSION_COOKIE } from "@/lib/session";
 import { isAdminRole } from "@/lib/admin-helpers";
 import LoginForm from "@/app/login/LoginForm";
 
 export default async function LoginPage() {
-  // treatPendingAsSignedOut: pending sessions (incomplete social sign-up) must NOT
-  // redirect to /app because auth.protect() there rejects them, creating a login↔app loop
-  // that Clerk breaks by redirecting to /signup.
-  const { userId: clerkId } = await auth({ treatPendingAsSignedOut: true });
-  if (clerkId) {
-    const user = await prisma.user.findUnique({ where: { clerkId }, select: { role: true } });
-    redirect(user?.role && isAdminRole(user.role) ? "/admin" : "/app");
+  const jar = await cookies();
+  const raw = jar.get(SESSION_COOKIE)?.value;
+  const sessionUser = await getSessionUser(raw);
+  if (sessionUser) {
+    redirect(isAdminRole(sessionUser.role) ? "/admin" : "/app");
   }
 
   // Load configurable content from DB; fall back to defaults if not set

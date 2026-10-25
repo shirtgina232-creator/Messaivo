@@ -1,16 +1,16 @@
-import { clerkMiddleware } from "@clerk/nextjs/server";
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 
-// Auth protection is handled in src/app/app/layout.tsx via auth.protect()
-export const proxy = clerkMiddleware();
+// Minimal passthrough proxy — auth is enforced in layouts and route handlers via session cookies.
+// The Meta OAuth callback is excluded so Facebook's cross-origin redirect reaches the handler
+// without interference (identity verified through HMAC-signed state instead).
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function proxy(_request: NextRequest) {
+  return NextResponse.next();
+}
 
 export const config = {
   matcher: [
-    // Exclude the Meta OAuth callback from Clerk middleware.
-    // Facebook's redirect-back arrives with Referer: www.facebook.com, which triggers
-    // Clerk's shouldForceHandshakeForCrossDomain — the middleware intercepts the request
-    // before the route handler runs, permanently breaking the OAuth code exchange.
-    // The callback validates identity through a signed state cookie (set at initiation)
-    // instead of Clerk's auth(), so it does not need the Clerk middleware.
     "/((?!_next/static|_next/image|favicon\\.svg|.*\\.png$|api/auth/meta/callback|auth/relay).*)",
   ],
 };

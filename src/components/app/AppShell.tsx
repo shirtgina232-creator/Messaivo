@@ -9,7 +9,6 @@ import {
   Search, Bell, HelpCircle, ChevronDown, MessageCircleMore, Mail,
   Phone, Check, LogOut, Zap, Globe, Plus, ArrowRight,
 } from "lucide-react";
-import { useAuth, useUser } from "@clerk/nextjs";
 import { useWorkspace } from "@/lib/workspace-context";
 import { MessaivoLogo } from "@/components/MessaivoLogo";
 import AnnouncementBanner from "@/components/app/AnnouncementBanner";
@@ -295,15 +294,18 @@ function Topbar({ onSearchOpen, notifOpen, setNotifOpen }: {
   const title = resolvePageTitle(pathname);
   const [userOpen, setUserOpen] = useState(false);
   const [supportOpen, setSupportOpen] = useState(false);
-  const { signOut } = useAuth();
+  const router = useRouter();
+  const { userName, userEmail } = useWorkspace();
 
-  // Real user data from Clerk
-  const { user } = useUser();
-  const { userName } = useWorkspace();
-  const firstName = user?.firstName ?? userName?.split(" ")[0] ?? "Me";
-  const fullName = user?.fullName ?? userName ?? "Account";
-  const email = user?.primaryEmailAddress?.emailAddress ?? "";
-  const initials = (user?.firstName?.[0] ?? userName?.[0] ?? "U").toUpperCase();
+  const signOut = async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    router.push("/login");
+  };
+
+  const fullName = userName ?? "Account";
+  const firstName = fullName.split(" ")[0] ?? "Me";
+  const email = userEmail ?? "";
+  const initials = (fullName[0] ?? "U").toUpperCase();
 
   return (
     <>
@@ -385,7 +387,7 @@ function Topbar({ onSearchOpen, notifOpen, setNotifOpen }: {
                 <button
                   className="w-full flex items-center gap-2.5 px-4 py-2.5 text-[12.5px] hover:bg-[rgba(255,255,255,0.04)]"
                   style={{ color: "#EF4444" }}
-                  onClick={() => signOut({ redirectUrl: "/login" })}
+                  onClick={signOut}
                 >
                   <LogOut size={13} /> Sign out
                 </button>
@@ -564,8 +566,8 @@ function GateLoader() {
 // ── Connect Facebook Gate ─────────────────────────────────────────────────────
 
 function ConnectFacebookGate() {
-  const { user } = useUser();
-  const firstName = user?.firstName ?? "there";
+  const { userName } = useWorkspace();
+  const firstName = userName?.split(" ")[0] ?? "there";
 
   return (
     <div className="flex-1 flex items-center justify-center p-6">

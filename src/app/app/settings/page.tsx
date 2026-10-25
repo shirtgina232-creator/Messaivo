@@ -3,7 +3,6 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { User, Building, Bell, Shield, Users, Check, Eye, EyeOff, ArrowRight, CreditCard } from "lucide-react";
-import { useUser } from "@clerk/nextjs";
 import { useWorkspace } from "@/lib/workspace-context";
 import { derivedPageColor } from "@/lib/workspace-context";
 
@@ -43,20 +42,16 @@ function SettingRow({ label, description, children }: { label: string; descripti
 // ── Profile Tab ───────────────────────────────────────────────────────────────
 
 function ProfileTab() {
-  const { user } = useUser();
-  const fullName = [user?.firstName, user?.lastName].filter(Boolean).join(" ") || user?.username || "";
-  const email = user?.emailAddresses?.[0]?.emailAddress ?? "";
+  const { userName, userEmail } = useWorkspace();
+  const fullName = userName ?? "";
+  const email = userEmail ?? "";
   const initials = fullName.split(" ").map(w => w[0] ?? "").join("").toUpperCase().slice(0, 2) || "?";
   const avatarColor = derivedPageColor(fullName || email);
 
   return (
     <div className="flex flex-col gap-5 max-w-lg">
       <div className="flex items-center gap-4 p-4 rounded-xl" style={{ background: "#101722", border: "1px solid rgba(255,255,255,0.08)" }}>
-        {user?.imageUrl ? (
-          <img src={user.imageUrl} alt="avatar" className="w-14 h-14 rounded-full object-cover shrink-0" />
-        ) : (
-          <div className="w-14 h-14 rounded-full flex items-center justify-center text-[18px] font-bold text-white shrink-0" style={{ background: avatarColor }}>{initials}</div>
-        )}
+        <div className="w-14 h-14 rounded-full flex items-center justify-center text-[18px] font-bold text-white shrink-0" style={{ background: avatarColor }}>{initials}</div>
         <div>
           <div className="text-[13.5px] font-semibold" style={{ color: "#F5F7FA" }}>{fullName || "—"}</div>
           <div className="text-[12px]" style={{ color: "#8B95A7" }}>{email}</div>
@@ -90,9 +85,6 @@ function ProfileTab() {
             <option>UTC-05:00 Eastern Time</option>
           </select>
         </div>
-      </div>
-      <div className="text-[12px]" style={{ color: "#8B95A7" }}>
-        Profile name and email are managed via your Clerk account.
       </div>
     </div>
   );
@@ -188,27 +180,62 @@ function NotificationsTab() {
 function SecurityTab() {
   const [showCurrent, setShowCurrent] = useState(false);
   const [showNew, setShowNew] = useState(false);
+  const [currentPw, setCurrentPw] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleUpdate = async () => {
+    if (!currentPw || !newPw) return;
+    if (newPw.length < 8) { setError("New password must be at least 8 characters."); return; }
+    setError(null);
+    setSaving(true);
+    try {
+      const res = await fetch("/api/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPassword: currentPw, newPassword: newPw }),
+      });
+      const data = await res.json() as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) { setError(data.error ?? "Failed to update password."); return; }
+      setSaved(true);
+      setCurrentPw("");
+      setNewPw("");
+      setTimeout(() => setSaved(false), 2000);
+    } catch { setError("Network error. Please try again."); }
+    finally { setSaving(false); }
+  };
 
   return (
     <div className="flex flex-col gap-5 max-w-lg">
       <h3 className="text-[13.5px] font-semibold" style={{ color: "#F5F7FA" }}>Change Password</h3>
-      {[
-        { label: "Current Password", show: showCurrent, toggle: () => setShowCurrent(!showCurrent) },
-        { label: "New Password",     show: showNew,     toggle: () => setShowNew(!showNew)         },
-      ].map(({ label, show, toggle }) => (
-        <div key={label}>
-          <label className="text-[11px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: "#8B95A7", opacity: 0.6 }}>{label}</label>
-          <div className="relative">
-            <input type={show ? "text" : "password"} placeholder="••••••••" className="w-full px-3 py-2.5 pr-10 rounded-lg text-[13px] outline-none" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" }} />
-            <button className="absolute right-3 top-1/2 -translate-y-1/2" onClick={toggle}>
-              {show ? <EyeOff size={14} style={{ color: "#8B95A7" }} /> : <Eye size={14} style={{ color: "#8B95A7" }} />}
-            </button>
-          </div>
+      <div>
+        <label className="text-[11px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: "#8B95A7", opacity: 0.6 }}>Current Password</label>
+        <div className="relative">
+          <input type={showCurrent ? "text" : "password"} value={currentPw} onChange={e => setCurrentPw(e.target.value)} placeholder="••••••••" className="w-full px-3 py-2.5 pr-10 rounded-lg text-[13px] outline-none" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" }} />
+          <button className="absolute right-3 top-1/2 -translate-y-1/2" onClick={() => setShowCurrent(!showCurrent)}>
+            {showCurrent ? <EyeOff size={14} style={{ color: "#8B95A7" }} /> : <Eye size={14} style={{ color: "#8B95A7" }} />}
+          </button>
         </div>
-      ))}
-      <button className="w-fit px-5 py-2.5 rounded-xl text-[13px] font-semibold text-white" style={{ background: saved ? "#10B981" : "#6C63FF" }} onClick={() => { setSaved(true); setTimeout(() => setSaved(false), 2000); }}>
-        {saved ? <span className="flex items-center gap-1.5"><Check size={13} /> Updated!</span> : "Update Password"}
+      </div>
+      <div>
+        <label className="text-[11px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: "#8B95A7", opacity: 0.6 }}>New Password</label>
+        <div className="relative">
+          <input type={showNew ? "text" : "password"} value={newPw} onChange={e => setNewPw(e.target.value)} placeholder="••••••••" className="w-full px-3 py-2.5 pr-10 rounded-lg text-[13px] outline-none" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#F5F7FA" }} />
+          <button className="absolute right-3 top-1/2 -translate-y-1/2" onClick={() => setShowNew(!showNew)}>
+            {showNew ? <EyeOff size={14} style={{ color: "#8B95A7" }} /> : <Eye size={14} style={{ color: "#8B95A7" }} />}
+          </button>
+        </div>
+      </div>
+      {error && <p className="text-[12px]" style={{ color: "#EF4444" }}>{error}</p>}
+      <button
+        className="w-fit px-5 py-2.5 rounded-xl text-[13px] font-semibold text-white"
+        style={{ background: saved ? "#10B981" : "#6C63FF", opacity: saving ? 0.7 : 1 }}
+        onClick={handleUpdate}
+        disabled={saving}
+      >
+        {saved ? <span className="flex items-center gap-1.5"><Check size={13} /> Updated!</span> : saving ? "Updating…" : "Update Password"}
       </button>
 
       <div className="mt-2 pt-4 border-t" style={{ borderColor: "rgba(255,255,255,0.07)" }}>
@@ -228,12 +255,11 @@ function SecurityTab() {
 // ── Team Tab ──────────────────────────────────────────────────────────────────
 
 function TeamTab() {
-  const { user } = useUser();
-  const { plan, teamMemberCount } = useWorkspace();
+  const { plan, teamMemberCount, userName, userEmail } = useWorkspace();
   const atLimit = teamMemberCount >= plan.teamMemberLimit;
 
-  const fullName = [user?.firstName, user?.lastName].filter(Boolean).join(" ") || user?.username || "You";
-  const email = user?.emailAddresses?.[0]?.emailAddress ?? "";
+  const fullName = userName ?? "You";
+  const email = userEmail ?? "";
   const initials = fullName.split(" ").map(w => w[0] ?? "").join("").toUpperCase().slice(0, 2) || "?";
   const avatarColor = derivedPageColor(fullName || email);
 
@@ -251,11 +277,7 @@ function TeamTab() {
       </div>
       <div className="rounded-xl overflow-hidden" style={{ background: "#101722", border: "1px solid rgba(255,255,255,0.08)" }}>
         <div className="flex items-center gap-3 px-4 py-4">
-          {user?.imageUrl ? (
-            <img src={user.imageUrl} alt="avatar" className="w-8 h-8 rounded-full object-cover shrink-0" />
-          ) : (
-            <div className="w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0" style={{ background: avatarColor }}>{initials}</div>
-          )}
+          <div className="w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0" style={{ background: avatarColor }}>{initials}</div>
           <div className="flex-1 min-w-0">
             <div className="text-[13px] font-semibold" style={{ color: "#F5F7FA" }}>{fullName}</div>
             <div className="text-[11.5px]" style={{ color: "#8B95A7" }}>{email}</div>
