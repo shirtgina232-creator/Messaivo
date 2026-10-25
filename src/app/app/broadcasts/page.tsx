@@ -493,6 +493,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
       setReachableLoading(true);
       try {
         const body: Record<string, unknown> = { pageId };
+        if (messagingType === "utility") body.messagingType = "utility";
         if (recipientMode === "groups" && selectedGroups.size > 0) body.groupIds = [...selectedGroups];
         const res = await fetch("/api/broadcasts/eligibility-check", {
           method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
@@ -512,7 +513,7 @@ function NewBroadcastPanel({ onClose, onCreated }: { onClose: () => void; onCrea
       finally { setReachableLoading(false); }
     }, 400);
     return () => { if (reachableTimerRef.current) clearTimeout(reachableTimerRef.current); };
-  }, [pageId, recipientMode, selectedGroups]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pageId, recipientMode, selectedGroups, messagingType]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selectedPage = pages.find(p => p.id === pageId);
   const filteredTemplates = templates.filter(t =>
