@@ -36,7 +36,14 @@ export async function GET(req: Request) {
 
     // Tag source so the compose UI can distinguish them if needed
     const templates = [
-      ...globalTemplates.map(t => { const r = registrations.find(r => r.templateId === t.id && r.contentHash === contentHash(t.content)); return { ...t, source: "global" as const, isUtility: !!r, metaTemplateName: r?.metaTemplateName ?? null, metaTemplateStatus: r?.status ?? null, registeredForPageId: r?.pageId ?? null }; }),
+      ...globalTemplates.map(t => {
+        // Exact hash match covers custom templates. Library templates use a different hash
+        // scheme (libraryContentHash vs contentHash), so fall back to any APPROVED
+        // registration for the same template+page when the exact hash doesn't match.
+        const r = registrations.find(r => r.templateId === t.id && r.contentHash === contentHash(t.content))
+          ?? registrations.find(r => r.templateId === t.id && r.status === "APPROVED");
+        return { ...t, source: "global" as const, isUtility: !!r, metaTemplateName: r?.metaTemplateName ?? null, metaTemplateStatus: r?.status ?? null, registeredForPageId: r?.pageId ?? null };
+      }),
       ...workspaceTemplates.map(t => ({ ...t, source: "workspace" as const, isUtility: false, metaTemplateName: null, metaTemplateStatus: null, registeredForPageId: null })),
     ];
 
