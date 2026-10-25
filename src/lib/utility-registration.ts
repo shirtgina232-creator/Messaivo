@@ -66,10 +66,12 @@ export async function approvedRegistration(workspaceId: string, pageId: string, 
   const row = await prisma.utilityTemplateRegistration.findFirst({ where: { workspaceId, pageId, templateId, contentHash: hash, ...(registrationId ? { id: registrationId } : {}) } });
   if (!row) throw new Error("Register this template revision for the selected Page first");
   const token = await verifyPageGrant(page);
-  const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
-  const checkedAt = row.lastCheckedAt;
-  if (row.status === "APPROVED" && row.metaTemplateId && checkedAt !== null && Date.now() - checkedAt.getTime() < TWENTY_FOUR_HOURS_MS) {
-    console.log(`[utility] Using recent approved registration; skipping Meta template refresh (lastCheckedAt=${checkedAt.toISOString()})`);
+  // Trust the DB when the registration is already APPROVED and has a Meta template ID.
+  // Calling GET /{pageId}/message_templates to re-verify requires pages_read_engagement
+  // (rejected by Meta App Review) and is not needed to send an already-approved template.
+  // If the template is deleted at Meta, the send will fail per-recipient with a clear error.
+  if (row.status === "APPROVED" && row.metaTemplateId) {
+    console.log(`[utility] Skipping Meta template refresh — registration already APPROVED (metaTemplateId=${row.metaTemplateId})`);
     return { page, token, registration: row };
   }
   const registration = await refreshRegistration(row, token, page.pageId);
