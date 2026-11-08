@@ -50,6 +50,13 @@ type BulkScanState = {
   done: boolean;
 };
 
+type DisconnectAllState = {
+  active: boolean;
+  done: boolean;
+  disconnected: number;
+  error: string | null;
+};
+
 // ── Error messages ────────────────────────────────────────────────────────────
 
 const ERROR_MSGS: Record<string, string> = {
@@ -95,6 +102,31 @@ function DisconnectModal({ pageName, onConfirm, onClose }: { pageName: string; o
           <div className="flex gap-3">
             <button onClick={onClose} className="flex-1 py-2.5 rounded-xl text-[13px] font-medium" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#8B95A7" }}>Cancel</button>
             <button onClick={onConfirm} className="flex-1 py-2.5 rounded-xl text-[13px] font-semibold" style={{ background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.25)", color: "#EF4444" }}>Disconnect</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Disconnect All modal ──────────────────────────────────────────────────────
+
+function DisconnectAllModal({ pageCount, onConfirm, onClose }: { pageCount: number; onConfirm: () => void; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative w-full max-w-sm rounded-2xl overflow-hidden" style={{ background: "#0A111B", border: "1px solid rgba(239,68,68,0.25)" }} onClick={e => e.stopPropagation()}>
+        <div className="px-6 py-5">
+          <div className="w-11 h-11 rounded-xl flex items-center justify-center mb-4" style={{ background: "rgba(239,68,68,0.1)" }}>
+            <WifiOff size={18} style={{ color: "#EF4444" }} />
+          </div>
+          <div className="text-[15px] font-semibold mb-2" style={{ color: "#F5F7FA" }}>Disconnect all {pageCount} page{pageCount !== 1 ? "s" : ""}?</div>
+          <div className="text-[12.5px] mb-5" style={{ color: "#8B95A7" }}>
+            All connected pages will be removed from Messaivo. Existing conversations, contacts, and broadcasts are preserved — no data will be deleted.
+          </div>
+          <div className="flex gap-3">
+            <button onClick={onClose} className="flex-1 py-2.5 rounded-xl text-[13px] font-medium" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#8B95A7" }}>Cancel</button>
+            <button onClick={onConfirm} className="flex-1 py-2.5 rounded-xl text-[13px] font-semibold" style={{ background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.25)", color: "#EF4444" }}>Disconnect All</button>
           </div>
         </div>
       </div>
@@ -252,6 +284,10 @@ export default function PagesPage() {
   const [scanProgress, setScanProgress] = useState<Record<string, ScanProgress>>({});
   const [bulkScan, setBulkScan]         = useState<BulkScanState | null>(null);
 
+  // Disconnect-all state
+  const [showDisconnectAll, setShowDisconnectAll]     = useState(false);
+  const [disconnectAllState, setDisconnectAllState]   = useState<DisconnectAllState | null>(null);
+
   // Fetch all pages (active + inactive) — used for both the grid and the select modal
   const fetchAll = useCallback(() => {
     setLoadingAll(true);
@@ -370,6 +406,23 @@ export default function PagesPage() {
     return success;
   };
 
+  const handleDisconnectAll = async () => {
+    setShowDisconnectAll(false);
+    setDisconnectAllState({ active: true, done: false, disconnected: 0, error: null });
+    try {
+      const res = await fetch("/api/pages/disconnect-all", { method: "POST" });
+      const data = await res.json() as { disconnected?: number; error?: string };
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      const count = data.disconnected ?? 0;
+      // Update workspace context for each page that was just disconnected
+      for (const p of activePages) disconnectPage(p.id);
+      setDisconnectAllState({ active: false, done: true, disconnected: count, error: null });
+      fetchAll();
+    } catch (e) {
+      setDisconnectAllState({ active: false, done: true, disconnected: 0, error: e instanceof Error ? e.message : "Unknown error" });
+    }
+  };
+
   const handleScanAll = async () => {
     if (bulkScan?.active) return;
     // Only scan pages that aren't already being scanned individually
@@ -421,21 +474,38 @@ export default function PagesPage() {
         </div>
         <div className="flex items-center gap-2">
           {activePages.length > 0 && (
-            <button
-              onClick={handleScanAll}
-              disabled={bulkScan?.active}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-semibold"
-              style={{
-                background: bulkScan?.active ? "rgba(108,99,255,0.12)" : "rgba(108,99,255,0.15)",
-                border: "1px solid rgba(108,99,255,0.3)",
-                color: bulkScan?.active ? "#8B85FF" : "#A09BFF",
-                opacity: bulkScan?.active ? 0.75 : 1,
-              }}
-            >
-              {bulkScan?.active
-                ? <><Loader2 size={13} className="animate-spin" /> Scanning {bulkScan.completed}/{bulkScan.total}…</>
-                : <><RefreshCw size={13} /> Scan All Pages</>}
-            </button>
+            <>
+              <button
+                onClick={handleScanAll}
+                disabled={bulkScan?.active || disconnectAllState?.active}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-semibold"
+                style={{
+                  background: bulkScan?.active ? "rgba(108,99,255,0.12)" : "rgba(108,99,255,0.15)",
+                  border: "1px solid rgba(108,99,255,0.3)",
+                  color: bulkScan?.active ? "#8B85FF" : "#A09BFF",
+                  opacity: (bulkScan?.active || disconnectAllState?.active) ? 0.75 : 1,
+                }}
+              >
+                {bulkScan?.active
+                  ? <><Loader2 size={13} className="animate-spin" /> Scanning {bulkScan.completed}/{bulkScan.total}…</>
+                  : <><RefreshCw size={13} /> Scan All Pages</>}
+              </button>
+              <button
+                onClick={() => setShowDisconnectAll(true)}
+                disabled={disconnectAllState?.active || bulkScan?.active}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-semibold"
+                style={{
+                  background: "rgba(239,68,68,0.08)",
+                  border: "1px solid rgba(239,68,68,0.2)",
+                  color: disconnectAllState?.active ? "#F08080" : "#EF4444",
+                  opacity: (disconnectAllState?.active || bulkScan?.active) ? 0.75 : 1,
+                }}
+              >
+                {disconnectAllState?.active
+                  ? <><Loader2 size={13} className="animate-spin" /> Disconnecting…</>
+                  : <><WifiOff size={13} /> Disconnect All</>}
+              </button>
+            </>
           )}
           <button
             onClick={handleConnectClick}
@@ -472,6 +542,27 @@ export default function PagesPage() {
               />
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Disconnect All — result banner */}
+      {disconnectAllState?.done && (
+        <div className="mb-4 px-4 py-3 rounded-xl flex items-center gap-3"
+          style={{
+            background: disconnectAllState.error ? "rgba(239,68,68,0.08)" : "rgba(16,185,129,0.08)",
+            border: `1px solid ${disconnectAllState.error ? "rgba(239,68,68,0.2)" : "rgba(16,185,129,0.2)"}`,
+          }}>
+          {disconnectAllState.error
+            ? <AlertCircle size={15} className="shrink-0" style={{ color: "#EF4444" }} />
+            : <CheckCircle2 size={15} className="shrink-0" style={{ color: "#10B981" }} />}
+          <span className="flex-1 text-[12.5px] font-medium" style={{ color: "#F5F7FA" }}>
+            {disconnectAllState.error
+              ? `Disconnect failed: ${disconnectAllState.error}`
+              : `${disconnectAllState.disconnected} page${disconnectAllState.disconnected !== 1 ? "s" : ""} disconnected successfully`}
+          </span>
+          <button onClick={() => setDisconnectAllState(null)} className="p-1 rounded-lg hover:bg-white/5 shrink-0" style={{ color: "#8B95A7" }}>
+            <X size={13} />
+          </button>
         </div>
       )}
 
@@ -677,6 +768,13 @@ export default function PagesPage() {
           pageName={pageToDisconnect.pageName}
           onConfirm={handleDisconnectConfirm}
           onClose={() => { setModal(null); setDisconnecting(null); }}
+        />
+      )}
+      {showDisconnectAll && (
+        <DisconnectAllModal
+          pageCount={activePages.length}
+          onConfirm={handleDisconnectAll}
+          onClose={() => setShowDisconnectAll(false)}
         />
       )}
     </div>
